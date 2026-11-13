@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workload-galaxy-config
+data:
+  GALAXY_REFRESH_SECONDS: "15"
+  GALAXY_FLOW_WINDOW_SECONDS: "60"
+  GALAXY_READ_CONFIGMAPS: "true"      # infer dependencies from ConfigMaps (values are never served)
+  GALAXY_HIDE_SELF: "true"            # leave this tool's own namespace out of the picture
+  GALAXY_NAMESPACES: ""               # empty = every namespace RBAC allows
+  GALAXY_EXCLUDE_NAMESPACES: ""
+  GALAXY_PROBES: "false"              # active TCP connect probes; see README before enabling
+  GALAXY_PROMETHEUS_URL: ""           # e.g. Istio / OpenShift Service Mesh metrics

@@ -1,0 +1,65 @@
+# Read-only access for the collector. Secrets are deliberately absent.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: workload-galaxy
+---
+# The node agent talks only to the collector; it needs no API permissions.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: galaxy-agent
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: workload-galaxy-reader
+rules:
+  - apiGroups: [""]
+    resources: [pods, services, endpoints, configmaps, nodes, namespaces, replicationcontrollers]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets, statefulsets, daemonsets]
+    verbs: [get, list, watch]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
+  - apiGroups: [metrics.k8s.io]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [httproutes]
+    verbs: [get, list, watch]
+  # OpenShift (ignored on vanilla Kubernetes)
+  - apiGroups: [route.openshift.io]
+    resources: [routes]
+    verbs: [get, list, watch]
+  - apiGroups: [apps.openshift.io]
+    resources: [deploymentconfigs]
+    verbs: [get, list, watch]
+  - apiGroups: [project.openshift.io]
+    resources: [projects]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: workload-galaxy-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: workload-galaxy-reader
+subjects:
+  - kind: ServiceAccount
+    name: workload-galaxy
+    namespace: workload-galaxy

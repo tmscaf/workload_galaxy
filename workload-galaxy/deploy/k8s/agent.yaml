@@ -1,0 +1,42 @@
+# Node agent: reads per-pod TCP socket state (via nsenter + ss) and the node's
+# conntrack table, and POSTs it to the collector. Optional - without it the
+# galaxy still shows declared and config-inferred topology, but no live
+# traffic direction, TCP RTT, retransmits or queue backpressure.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: galaxy-agent
+  labels: {app.kubernetes.io/name: workload-galaxy, app.kubernetes.io/component: agent}
+spec:
+  selector:
+    matchLabels: {app.kubernetes.io/name: workload-galaxy, app.kubernetes.io/component: agent}
+  updateStrategy: {type: RollingUpdate}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: workload-galaxy, app.kubernetes.io/component: agent}
+    spec:
+      serviceAccountName: galaxy-agent
+      automountServiceAccountToken: false
+      hostPID: true                  # see every pod's processes -> their network namespaces
+      tolerations: [{operator: Exists}]
+      containers:
+        - name: agent
+          image: workload-galaxy:latest
+          imagePullPolicy: IfNotPresent
+          command: [python, /app/agent.py]
+          env:
+            - name: NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+            - name: GALAXY_COLLECTOR_URL
+              value: http://workload-galaxy:8080
+            - name: GALAXY_AGENT_TOKEN
+              valueFrom: {secretKeyRef: {name: galaxy-agent-token, key: token}}
+            - name: GALAXY_AGENT_INTERVAL
+              value: "10"
+          resources:
+            requests: {cpu: 20m, memory: 48Mi}
+            limits: {memory: 192Mi}
+          securityContext:
+            runAsUser: 0
+            privileged: true         # nsenter into pod network namespaces, read conntrack
+            readOnlyRootFilesystem: true

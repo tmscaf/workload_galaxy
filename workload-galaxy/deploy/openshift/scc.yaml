@@ -1,0 +1,16 @@
+# The node agent needs hostPID + privileged (nsenter into pod netns, read conntrack).
+# Equivalent to: oc adm policy add-scc-to-user privileged -z galaxy-agent -n workload-galaxy
+# Leave this file (and agent.yaml) out if your platform team will not grant it; the
+# collector then runs on declared + config-inferred topology and mesh metrics only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: galaxy-agent-privileged-scc
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:privileged
+subjects:
+  - kind: ServiceAccount
+    name: galaxy-agent
+    namespace: workload-galaxy

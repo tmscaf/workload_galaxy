@@ -1,0 +1,19 @@
+# OpenShift 4.x:
+#   oc new-project workload-galaxy
+#   oc -n workload-galaxy create secret generic galaxy-agent-token --from-literal=token="$(openssl rand -hex 32)"
+#   oc apply -k deploy/openshift
+# Point `images` at your registry (internal: image-registry.openshift-image-registry.svc:5000/workload-galaxy/workload-galaxy).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: workload-galaxy
+resources:
+  - ../k8s
+  - route.yaml
+  - scc.yaml
+  - monitoring.yaml
+patches:
+  - path: prometheus-env.yaml
+images:
+  - name: workload-galaxy
+    newName: image-registry.openshift-image-registry.svc:5000/workload-galaxy/workload-galaxy
+    newTag: 0.1.0-1

@@ -1,0 +1,10 @@
+# The UI has no login of its own. Before exposing beyond trusted operators, put it
+# behind the suite's gateway or an oauth-proxy sidecar (see README "Security").
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: workload-galaxy
+spec:
+  to: {kind: Service, name: workload-galaxy}
+  port: {targetPort: http}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}

@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workload-galaxy
+  labels: {app.kubernetes.io/name: workload-galaxy, app.kubernetes.io/component: collector}
+spec:
+  replicas: 1                     # state (agent reports) is in memory: keep a single replica
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/name: workload-galaxy, app.kubernetes.io/component: collector}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: workload-galaxy, app.kubernetes.io/component: collector}
+    spec:
+      serviceAccountName: workload-galaxy
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: collector
+          image: workload-galaxy:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{name: http, containerPort: 8080}]
+          env:
+            - name: POD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - name: GALAXY_AGENT_TOKEN
+              valueFrom: {secretKeyRef: {name: galaxy-agent-token, key: token}}
+          envFrom:
+            - configMapRef: {name: workload-galaxy-config}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+            failureThreshold: 6
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workload-galaxy
+  labels: {app.kubernetes.io/name: workload-galaxy}
+spec:
+  selector: {app.kubernetes.io/name: workload-galaxy, app.kubernetes.io/component: collector}
+  ports: [{name: http, port: 8080, targetPort: http}]

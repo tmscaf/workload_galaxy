@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workload Galaxy</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='5' fill='%2390e0ff'/%3E%3Cellipse cx='16' cy='16' rx='14' ry='6' fill='none' stroke='%239b7bff' stroke-width='2' transform='rotate(-25 16 16)'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/app.css">
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/addons/" } }
+  </script>
+</head>
+<body>
+  <div id="stage" aria-label="Workload topology visualization"></div>
+  <div id="labels"></div>
+
+  <header id="topbar" class="glass">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="4.5" fill="var(--core)"/><ellipse cx="16" cy="16" rx="14" ry="5.5" fill="none" stroke="var(--violet)" stroke-width="1.6" transform="rotate(-25 16 16)"/><circle cx="27" cy="11" r="1.6" fill="var(--cyan)"/></svg>
+      <span class="title">Workload Galaxy</span>
+      <span id="version" class="chip subtle version" hidden></span>
+      <span id="cluster" class="chip subtle"></span>
+    </div>
+    <div class="seg" role="tablist" aria-label="View">
+      <button data-view="galaxy" class="on" role="tab">Galaxy</button>
+      <button data-view="strata" role="tab">Strata</button>
+      <button data-view="cascade" role="tab">Cascade</button>
+      <button data-view="gibson" role="tab" title="The cluster as a city: towers = workloads, floors = pods, traces = calls">Gibson</button>
+    </div>
+    <div class="ns-picker">
+      <button id="nsButton" class="btn" aria-haspopup="true" aria-expanded="false">
+        <span class="eyebrow">Projects</span> <span id="nsSummary">All</span> <span class="caret">▾</span>
+      </button>
+      <div id="nsMenu" class="glass menu" hidden>
+        <div class="menu-head">
+          <input id="nsFilter" type="search" placeholder="Filter projects" autocomplete="off">
+          <div class="menu-actions"><button id="nsAll" class="link">All</button><button id="nsNone" class="link">Clear</button></div>
+        </div>
+        <label class="switch"><input id="platformToggle" type="checkbox"> <span>Include platform namespaces</span></label>
+        <ul id="nsList"></ul>
+      </div>
+    </div>
+    <div class="search">
+      <input id="search" type="search" placeholder="Find workload, pod, host…" autocomplete="off" aria-label="Search">
+      <ul id="searchResults" class="glass menu" hidden></ul>
+    </div>
+    <div class="scenario-picker" id="scenarioPicker" hidden>
+      <button id="scenarioButton" class="btn" aria-haspopup="true" aria-expanded="false">
+        <span class="eyebrow warn">Simulate</span> <span id="scenarioSummary">Baseline</span> <span class="caret">▾</span>
+      </button>
+      <div id="scenarioMenu" class="glass menu wide" hidden>
+        <div class="menu-head"><span class="menu-title">Fault scenarios (demo cluster)</span>
+          <div class="menu-actions"><button id="scenarioClear" class="link">Reset to baseline</button></div></div>
+        <ul id="scenarioList"></ul>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <div id="sources" class="sources"></div>
+    <div id="live" class="live" title="Data freshness"><span class="dot"></span><span id="liveText">connecting…</span></div>
+  </header>
+
+  <aside id="rail" class="glass">
+    <section id="scenarioGuide" class="rail-section" hidden></section>
+    <section id="layers" class="rail-section">
+      <h2>Layers</h2>
+      <ol class="layers"></ol>
+    </section>
+    <section id="cascadeSection" class="rail-section">
+      <h2>Failure cascades <span class="hint">root → blast radius</span></h2>
+      <ol id="cascades" class="list"></ol>
+    </section>
+    <section class="rail-section">
+      <h2>Hotspots <span class="hint">where latency starts</span></h2>
+      <ol id="hotspots" class="list"></ol>
+    </section>
+    <section class="rail-section">
+      <h2>Riskiest request paths</h2>
+      <ol id="paths" class="list"></ol>
+    </section>
+  </aside>
+
+  <aside id="drawer" class="glass" hidden>
+    <button id="drawerClose" class="icon-btn" aria-label="Close details">×</button>
+    <div id="drawerBody"></div>
+  </aside>
+
+  <div id="legend" class="glass">
+    <div class="legend-row">
+      <span class="sw" style="--c:var(--cyan)"></span>healthy flow
+      <span class="sw" style="--c:var(--warn)"></span>elevated latency
+      <span class="sw" style="--c:var(--crit)"></span>latency / failures
+      <span class="sw dashed"></span>inferred from config
+      <span class="legend-gibson">tower = workload · floor = pod (amber/red = failing, dashed = unscheduled) · traces = calls</span>
+      <span class="legend-cascade"><span class="sw" style="--c:var(--crit)"></span>◀ impact flowing back from a root cause</span>
+    </div>
+    <div class="legend-row toggles">
+      <label><input type="checkbox" id="tPods" checked> Pods</label>
+      <label><input type="checkbox" id="tInferred" checked> Inferred links</label>
+      <label><input type="checkbox" id="tResponses"> Responses</label>
+      <label><input type="checkbox" id="tLabels" checked> Labels</label>
+      <label><input type="checkbox" id="tRotate" checked> Drift</label>
+    </div>
+  </div>
+
+  <div id="tooltip" class="glass" hidden></div>
+  <div id="toast" hidden></div>
+  <div id="updateBanner" class="glass" hidden>
+    <span id="updateText"></span>
+    <button id="updateReload" class="btn">Reload</button>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

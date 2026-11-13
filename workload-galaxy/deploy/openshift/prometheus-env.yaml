@@ -1,0 +1,16 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workload-galaxy
+spec:
+  template:
+    spec:
+      containers:
+        - name: collector
+          env:
+            - name: GALAXY_PROMETHEUS_URL
+              value: https://thanos-querier.openshift-monitoring.svc:9091
+            - name: GALAXY_PROMETHEUS_TOKEN_FILE
+              value: /var/run/secrets/kubernetes.io/serviceaccount/token
+            - name: GALAXY_PROMETHEUS_CA_FILE
+              value: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
