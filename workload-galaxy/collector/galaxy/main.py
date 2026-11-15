@@ -4,6 +4,8 @@
     GET  /api/v1/namespaces        namespace / project summaries
     GET  /api/v1/topology          graph; ?ns=a,b  ?platform=true
     GET  /api/v1/hotspots          ranked problems, riskiest paths, failure cascades (same filters)
+    GET  /api/v1/triage            findings (what is wrong, why, what to do), project scorecards, recent changes
+    GET  /api/v1/logs              last log lines of one container (only with GALAXY_POD_LOGS=true)
     POST /api/v1/agent/report      node agent ingest (Bearer GALAXY_AGENT_TOKEN)
     GET  /healthz /readyz
     GET  /                         the galaxy UI (works under any path prefix)
@@ -80,7 +82,8 @@ def meta():
     return {"version": __version__, "build": __build__, "startedAt": STARTED_AT, "assetBuild": build_id(),
             "mode": settings.mode, "inCluster": state.in_cluster,
             "updatedAt": state.updated_at or None, "refreshSeconds": settings.refresh_seconds,
-            "error": state.error, "cluster": graph.get("cluster"), "sources": graph.get("sources")}
+            "error": state.error, "cluster": graph.get("cluster"), "sources": graph.get("sources"),
+            "podLogs": settings.pod_logs or settings.mode == "demo"}
 
 
 @app.get("/api/v1/version")
@@ -111,6 +114,43 @@ def hotspots(ns: str | None = None, platform: bool = False):
     graph = filter_graph(_graph_or_503(), _ns(ns), platform)
     return {"generatedAt": graph["generatedAt"], "hotspots": graph["hotspots"], "paths": graph["paths"],
             "cascades": graph.get("cascades", [])}
+
+
+@app.get("/api/v1/triage")
+def triage(ns: str | None = None, platform: bool = False,
+           severity: str | None = Query(None, description="critical | warning | info: this level and worse")):
+    """The troubleshooting view as data: root causes first, each with cause, next step and commands."""
+    full = _graph_or_503()
+    graph = filter_graph(full, _ns(ns), platform)
+    rank = {"critical": 0, "warning": 1, "info": 2}
+    findings = [f for f in graph["findings"] if rank[f["severity"]] <= rank.get(severity or "info", 2)]
+    scope = set(_ns(ns) or [])
+    projects = [p for p in full.get("namespaces", [])
+                if (p["name"] in scope if scope else (platform or not p["platform"]))]
+    counts = {k: sum(1 for f in findings if f["severity"] == k) for k in rank}
+    return {"generatedAt": graph["generatedAt"], "cluster": graph.get("cluster"), "counts": counts,
+            "rootCauses": sum(1 for f in findings if f["root"] and not f.get("effectOf") and f["severity"] != "info"),
+            "findings": findings, "projects": projects, "changes": graph.get("changes", []),
+            "platform": full.get("platform", {}), "cascades": graph.get("cascades", [])}
+
+
+@app.get("/api/v1/logs")
+def logs(ns: str, pod: str, container: str | None = None, previous: bool = False):
+    """Tail of one container's log. Off unless GALAXY_POD_LOGS=true: logs can hold what config never shows."""
+    if settings.mode == "demo":
+        return {"lines": state.source.pod_logs(ns, pod, container, previous), "previous": previous}
+    if not settings.pod_logs:
+        raise HTTPException(403, detail="log access is disabled (set GALAXY_POD_LOGS=true and grant pods/log)")
+    graph = _graph_or_503()
+    known = any(n["kind"] == "workload" and n["namespace"] == ns and any(p["name"] == pod for p in n["pods"])
+                for n in graph["nodes"])
+    if not known:
+        raise HTTPException(404, detail="unknown pod")      # only pods this collector shows; never an arbitrary path
+    try:
+        text = state.source.pod_logs(ns, pod, container, previous)
+    except Exception as err:  # noqa: BLE001
+        raise HTTPException(502, detail=str(err)[:300]) from err
+    return {"lines": text.splitlines()[-80:], "previous": previous}
 
 
 def _demo_source():

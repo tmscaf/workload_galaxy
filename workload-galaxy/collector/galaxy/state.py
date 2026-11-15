@@ -38,7 +38,10 @@ class GalaxyState:
 
             from .demo import DemoSource
             self.source = DemoSource()
+            from .scenarios import PRESETS
             preset = [s for s in os.environ.get("GALAXY_DEMO_SCENARIOS", "").split(",") if s.strip()]
+            named = os.environ.get("GALAXY_DEMO_PRESET", "").strip()       # a curated combination, by id
+            preset += next((p["scenarios"] for p in PRESETS if p["id"] == named), [])
             if preset:
                 self.source.set_scenarios([s.strip() for s in preset])
             self.in_cluster = False
@@ -94,7 +97,9 @@ class GalaxyState:
         builder = Builder(snap, reports=reports, mesh=mesh, probes=self.prober.results(),
                           ext_dns=self.source.dns() if demo else self._ext_dns(),
                           hidden_namespaces=hidden, sources=sources,
-                          flow_idle_seconds=self.settings.flow_idle_seconds)
+                          flow_idle_seconds=self.settings.flow_idle_seconds,
+                          internal_cidrs=self.settings.internal_cidrs,
+                          event_window_seconds=self.settings.event_window_seconds)
         graph = public(builder.build())
         if self.settings.resolve_external_hosts and not demo:
             self._resolve_hosts(graph.get("externalHosts", []))

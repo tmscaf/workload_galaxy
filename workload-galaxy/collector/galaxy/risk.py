@@ -19,6 +19,14 @@ BAD_REASONS = {
     "ContainerStatusUnknown": 0.5, "RunContainerError": 0.8, "InvalidImageName": 0.8,
 }
 UNSCHEDULED_ID = "host:(unscheduled)"
+
+
+def bad_reason(reason: str) -> str | None:
+    """The failure a pod reason stands for; init-container failures count like the main container's."""
+    base = reason.split(":", 1)[1] if reason.startswith("Init:") else reason
+    if base in BAD_REASONS:
+        return base
+    return "CrashLoopBackOff" if reason.startswith("Init:") and base == "Error" else None
 MAX_PATHS = 8
 MAX_PATH_DEPTH = 9
 MAX_PATH_STEPS = 20000
@@ -28,9 +36,11 @@ class _Acc:
     def __init__(self) -> None:
         self.items: list[dict] = []
 
-    def add(self, weight: float, text: str, category: str) -> None:
+    def add(self, weight: float, text: str, category: str, code: str = "") -> None:
+        """`code` names the signal, so diagnose.py can attach a cause and a next step to it."""
         if weight > 0:
-            self.items.append({"weight": round(min(1.0, weight), 3), "text": text, "category": category})
+            self.items.append({"weight": round(min(1.0, weight), 3), "text": text, "category": category,
+                               "code": code})
 
     def result(self) -> dict:
         self.items.sort(key=lambda r: r["weight"], reverse=True)
@@ -63,16 +73,16 @@ def score_edge(edge: dict, nodes: dict[str, dict]) -> dict:
     p95 = lat.get("p95Ms")
     if p95 is not None:
         if p95 > 1000:
-            acc.add(0.9, f"Request p95 {p95:.0f} ms", "latency")
+            acc.add(0.9, f"Request p95 {p95:.0f} ms", "latency", "p95")
         elif p95 > 300:
-            acc.add(0.65, f"Request p95 {p95:.0f} ms", "latency")
+            acc.add(0.65, f"Request p95 {p95:.0f} ms", "latency", "p95")
         elif p95 > 100:
-            acc.add(0.35, f"Request p95 {p95:.0f} ms", "latency")
+            acc.add(0.35, f"Request p95 {p95:.0f} ms", "latency", "p95")
     err = health.get("errorRate") or 0
     if err > 0.05:
-        acc.add(0.8, f"{_pct(err)} of requests fail (5xx)", "errors")
+        acc.add(0.8, f"{_pct(err)} of requests fail (5xx)", "errors", "errors")
     elif err > 0.01:
-        acc.add(0.45, f"{_pct(err)} of requests fail (5xx)", "errors")
+        acc.add(0.45, f"{_pct(err)} of requests fail (5xx)", "errors", "errors")
 
     # Network path: judged on the kernel's *minimum* RTT. Inside a cluster that floor is well under
     # a millisecond; a high floor means a slow or long path. Internet distance is not a fault, so
@@ -81,33 +91,35 @@ def score_edge(edge: dict, nodes: dict[str, dict]) -> dict:
     floor = lat.get("rttMinMs")
     if floor is not None and not external:
         if floor > 10:
-            acc.add(0.6, f"Network path RTT {floor:.1f} ms - far too slow for in-cluster traffic", "network")
+            acc.add(0.6, f"Network path RTT {floor:.1f} ms - far too slow for in-cluster traffic", "network", "rtt")
         elif floor > 2:
-            acc.add(0.3, f"Network path RTT {floor:.1f} ms - unusually high inside a cluster", "network")
+            acc.add(0.3, f"Network path RTT {floor:.1f} ms - unusually high inside a cluster", "network", "rtt")
     if health.get("retrans"):
-        acc.add(0.5, f"{health['retrans']} segment(s) being retransmitted now", "network")
+        acc.add(0.5, f"{health['retrans']} segment(s) being retransmitted now", "network", "retrans")
     if health.get("sendQ"):
         acc.add(0.45, f"{health['sendQ']} bytes unacknowledged in client send queues - receiver or path is slow",
-                "backpressure")
+                "backpressure", "sendq")
     if health.get("pending"):
-        acc.add(0.7, f"{health['pending']} connection attempt(s) not answered", "availability")
+        acc.add(0.7, f"{health['pending']} connection attempt(s) not answered", "availability", "pending")
     if health.get("probeFailures"):
-        acc.add(0.7, f"Connect probe failed {health['probeFailures']}/{health.get('probeAttempts')}", "availability")
+        acc.add(0.7, f"Connect probe failed {health['probeFailures']}/{health.get('probeAttempts')}", "availability", "probe-fail")
     elif (lat.get("connectP50Ms") or 0) > 10:
-        acc.add(0.35, f"Slow TCP connect ({lat['connectP50Ms']:.1f} ms)", "network")
+        acc.add(0.35, f"Slow TCP connect ({lat['connectP50Ms']:.1f} ms)", "network", "connect-slow")
 
     if target.get("kind") == "service":
-        acc.add(0.85, f"Service {target.get('name')} has no backing pods - calls fail or time out", "availability")
+        acc.add(0.85, f"Service {target.get('name')} has no backing pods - calls fail or time out", "availability", "svc-no-pods")
     if target.get("kind") == "workload":
         r = target.get("replicas", {})
         if r.get("desired", 0) > 0 and r.get("ready", 0) == 0 and target.get("subkind") not in ("CronJob", "Job"):
-            acc.add(0.6, "Every pod behind this call is unready", "availability")
+            acc.add(0.6, "Every pod behind this call is unready", "availability", "target-unready")
     if source.get("kind") == "workload" and target.get("kind") == "workload":
         src_zones = {nodes.get(f"host:{h}", {}).get("zone") for h in source.get("hosts", [])} - {"", None}
         dst_zones = {nodes.get(f"host:{h}", {}).get("zone") for h in target.get("hosts", [])} - {"", None}
         if src_zones and dst_zones and not (src_zones & dst_zones):
             acc.add(0.25, f"Crosses zones ({', '.join(sorted(src_zones))} -> {', '.join(sorted(dst_zones))})",
-                    "network")
+                    "network", "cross-zone")
+    for d in edge.get("diag") or []:
+        acc.add(d["weight"], d["text"], d["category"], "diag")
     return acc.result()
 
 
@@ -122,9 +134,9 @@ def score_workload(n: dict, nodes: dict[str, dict], inbound: list[dict], listen:
     if not batch and desired > 0:
         if ready == 0:
             acc.add(0.9, f"No ready pods (0/{desired})" if current else f"No pods running (0/{desired})",
-                    "availability")
+                    "availability", "replicas")
         elif ready < desired:
-            acc.add(0.25 + 0.5 * (1 - ready / desired), f"{ready}/{desired} pods ready", "availability")
+            acc.add(0.25 + 0.5 * (1 - ready / desired), f"{ready}/{desired} pods ready", "availability", "replicas")
 
     reasons: dict[str, int] = defaultdict(int)
     recent = 0
@@ -138,7 +150,7 @@ def score_workload(n: dict, nodes: dict[str, dict], inbound: list[dict], listen:
         if p["phase"] == "Pending" and not p["node"]:
             unscheduled[p["message"] or p["reason"]] += 1
             continue
-        if p["reason"] in BAD_REASONS:
+        if bad_reason(p["reason"]):
             reasons[p["reason"]] += 1
         recent += p.get("recentRestarts", 0)
         if p.get("cpu") is not None and p.get("cpuLimit"):
@@ -146,44 +158,50 @@ def score_workload(n: dict, nodes: dict[str, dict], inbound: list[dict], listen:
         if p.get("mem") is not None and p.get("memLimit"):
             mem_ratio = max(mem_ratio, p["mem"] / p["memLimit"])
     for reason, count in reasons.items():
-        acc.add(BAD_REASONS[reason], f"{count} pod(s) in {reason}", "availability")
+        acc.add(BAD_REASONS[bad_reason(reason)], f"{count} pod(s) in {reason}", "availability",
+                f"pod:{bad_reason(reason)}")
     for msg, count in unscheduled.items():
-        acc.add(0.7, f"{count} pod(s) can't be scheduled: {msg}", "scheduling")
+        acc.add(0.7, f"{count} pod(s) can't be scheduled: {msg}", "scheduling", "unschedulable")
     if evicted:
-        acc.add(0.4, f"{evicted} pod(s) evicted by the kubelet (node pressure)", "stability")
+        acc.add(0.4, f"{evicted} pod(s) evicted by the kubelet (node pressure)", "stability", "evicted")
     if recent:
-        acc.add(min(0.6, 0.2 + 0.1 * recent), f"{recent} container restart(s) in the last hour", "stability")
+        acc.add(min(0.6, 0.2 + 0.1 * recent), f"{recent} container restart(s) in the last hour", "stability",
+                "restarts")
     if cpu_ratio >= 0.9:
-        acc.add(0.7, f"CPU at {_pct(cpu_ratio)} of limit - CFS throttling adds latency", "saturation")
+        acc.add(0.7, f"CPU at {_pct(cpu_ratio)} of limit - CFS throttling adds latency", "saturation", "cpu")
     elif cpu_ratio >= 0.75:
-        acc.add(0.4, f"CPU at {_pct(cpu_ratio)} of limit", "saturation")
+        acc.add(0.4, f"CPU at {_pct(cpu_ratio)} of limit", "saturation", "cpu")
     if mem_ratio >= 0.9:
-        acc.add(0.6, f"Memory at {_pct(mem_ratio)} of limit - OOM kills / GC pauses likely", "saturation")
+        acc.add(0.6, f"Memory at {_pct(mem_ratio)} of limit - OOM kills / GC pauses likely", "saturation", "mem")
     elif mem_ratio >= 0.8:
-        acc.add(0.3, f"Memory at {_pct(mem_ratio)} of limit", "saturation")
+        acc.add(0.3, f"Memory at {_pct(mem_ratio)} of limit", "saturation", "mem")
     n["usage"] = {"cpuRatio": round(cpu_ratio, 3) if cpu_ratio else None,
                   "memRatio": round(mem_ratio, 3) if mem_ratio else None}
 
     hpa = n.get("hpa")
     if hpa and hpa.get("max") and (hpa.get("current") or 0) >= hpa["max"]:
-        acc.add(0.5, f"Autoscaler pinned at max ({hpa['max']} replicas)", "saturation")
+        acc.add(0.5, f"Autoscaler pinned at max ({hpa['max']} replicas)", "saturation", "hpa-max")
     if listen and listen.get("queue"):
         q, b = listen["queue"], listen.get("backlog") or 0
         ratio = q / b if b else 0
-        acc.add(min(0.9, 0.45 + ratio), f"{q} connection(s) waiting in the accept queue (backlog {b})", "saturation")
+        acc.add(min(0.9, 0.45 + ratio), f"{q} connection(s) waiting in the accept queue (backlog {b})", "saturation",
+                "accept-queue")
     recv_q = sum(e["health"].get("recvQ") or 0 for e in inbound)
     if recv_q:
-        acc.add(0.45, f"{recv_q} bytes received but not yet read by the app - it is not keeping up", "saturation")
+        acc.add(0.45, f"{recv_q} bytes received but not yet read by the app - it is not keeping up", "saturation", "recvq")
     if probe and probe.get("attempts"):
         fails = probe["failures"]
         if fails:
-            acc.add(0.6, f"{fails}/{probe['attempts']} connect probes to pods failed", "availability")
+            acc.add(0.6, f"{fails}/{probe['attempts']} connect probes to pods failed", "availability", "probe-fail")
         p95 = percentile(probe["samples"], 0.95)
         if p95 is not None and p95 > 20:
-            acc.add(0.4, f"Pods slow to accept connections (p95 {p95:.1f} ms)", "saturation")
+            acc.add(0.4, f"Pods slow to accept connections (p95 {p95:.1f} ms)", "saturation", "probe-slow")
     callers = {e["source"] for e in inbound if e["type"] == "calls"}
     if desired == 1 and len(callers) >= 3 and not batch:
-        acc.add(0.2, f"Single replica serving {len(callers)} callers", "capacity")
+        acc.add(0.2, f"Single replica serving {len(callers)} callers", "capacity", "single-replica")
+    # What diagnose.py found that pod states alone don't show: stuck rollouts, quota, storage, wiring.
+    for d in n.get("diag") or []:
+        acc.add(d["weight"], d["text"], d["category"], "diag")
     # Node trouble is attributed through impact (impactFrom = the host), not as the workload's own fault.
     return acc.result()
 
@@ -208,41 +226,41 @@ def score_host(n: dict) -> dict:
         for p in pending:
             msgs[p["message"] or p["reason"]] += 1
         for msg, count in sorted(msgs.items(), key=lambda kv: -kv[1]):
-            acc.add(0.9 if count == len(pending) else 0.7, f"{count} pod(s): {msg}", "scheduling")
+            acc.add(0.9 if count == len(pending) else 0.7, f"{count} pod(s): {msg}", "scheduling", "sched-queue")
         return acc.result()
     if not n.get("ready"):
         acc.add(0.95, f"Node {'unreachable' if n.get('readyStatus') == 'Unknown' else 'NotReady'}"
-                      f"{' - ' + n['readyMessage'] if n.get('readyMessage') else ''}", "infrastructure")
+                      f"{' - ' + n['readyMessage'] if n.get('readyMessage') else ''}", "infrastructure", "notready")
     for p in n.get("pressure") or []:
-        acc.add(0.7, PRESSURE_TEXT.get(p, p), "infrastructure")
+        acc.add(0.7, PRESSURE_TEXT.get(p, p), "infrastructure", f"pressure:{p}")
     cpu_a, mem_a = n.get("cpuAllocatable"), n.get("memAllocatable")
     if cpu_a:
         n["cpuRatio"] = round(n.get("cpuUsed", 0) / cpu_a, 3)
         n["cpuRequestRatio"] = round(n.get("cpuRequested", 0) / cpu_a, 3)
         if n["cpuRatio"] > 0.9:
-            acc.add(0.6, f"Pods use {_pct(n['cpuRatio'])} of node CPU - every pod here competes for cycles", "saturation")
+            acc.add(0.6, f"Pods use {_pct(n['cpuRatio'])} of node CPU - every pod here competes for cycles", "saturation", "node-cpu")
         elif n["cpuRatio"] > 0.75:
-            acc.add(0.3, f"Pods use {_pct(n['cpuRatio'])} of node CPU", "saturation")
+            acc.add(0.3, f"Pods use {_pct(n['cpuRatio'])} of node CPU", "saturation", "node-cpu")
         if n["cpuRequestRatio"] >= 0.9:
-            acc.add(0.35, f"CPU requests reserve {_pct(n['cpuRequestRatio'])} of allocatable", "reservations")
+            acc.add(0.35, f"CPU requests reserve {_pct(n['cpuRequestRatio'])} of allocatable", "reservations", "node-cpu-req")
     if mem_a:
         n["memRatio"] = round(n.get("memUsed", 0) / mem_a, 3)
         n["memRequestRatio"] = round(n.get("memRequested", 0) / mem_a, 3)
         n["memLimitRatio"] = round(n.get("memLimits", 0) / mem_a, 3)
         if n["memRatio"] > 0.9:
-            acc.add(0.6, f"Pods use {_pct(n['memRatio'])} of node memory", "saturation")
+            acc.add(0.6, f"Pods use {_pct(n['memRatio'])} of node memory", "saturation", "node-mem")
         elif n["memRatio"] > 0.8:
-            acc.add(0.3, f"Pods use {_pct(n['memRatio'])} of node memory", "saturation")
+            acc.add(0.3, f"Pods use {_pct(n['memRatio'])} of node memory", "saturation", "node-mem")
         free = mem_a - n.get("memRequested", 0)
         if n["memRequestRatio"] >= 0.98:
             acc.add(0.6, f"Memory requests reserve {_pct(n['memRequestRatio'])} of allocatable "
-                         f"({_gib(free)} free) - nothing more can be scheduled here", "reservations")
+                         f"({_gib(free)} free) - nothing more can be scheduled here", "reservations", "node-mem-req")
         elif n["memRequestRatio"] >= 0.9:
             acc.add(0.45, f"Memory requests reserve {_pct(n['memRequestRatio'])} of allocatable "
-                          f"({_gib(free)} free) - little room to reschedule pods", "reservations")
+                          f"({_gib(free)} free) - little room to reschedule pods", "reservations", "node-mem-req")
         if n["memLimitRatio"] > 1.5:
             acc.add(0.3, f"Memory limits overcommitted {n['memLimitRatio']:.1f}x allocatable - "
-                         "OOM kills if pods grow toward their limits", "reservations")
+                         "OOM kills if pods grow toward their limits", "reservations", "node-mem-limits")
     if n.get("memCapacity") and mem_a:
         n["memSystemReserved"] = max(0.0, n["memCapacity"] - mem_a)
     net = n.get("net") or {}
@@ -253,21 +271,21 @@ def score_host(n: dict) -> dict:
         if net["retransConnections"] >= 3 and ((multi and net["retransShare"] >= 0.6) or (not multi and own >= 0.2)):
             acc.add(0.7 if own >= 0.2 else 0.5,
                     f"Retransmits on {net['retransConnections']} of {net['connections']} connections from pods on "
-                    f"this node ({_pct(net['retransShare'])} of the cluster's) - packet loss", "network")
+                    f"this node ({_pct(net['retransShare'])} of the cluster's) - packet loss", "network", "node-retrans")
         # "Slower than the same calls from other nodes" only means something when there ARE other
         # nodes; on a single node it compares delayed-ACK noise with itself. Demand a clear pattern.
         slow = net.get("slowConnections", 0)
         if multi and slow >= 5 and net["slowShare"] >= 0.6 and slow / net["connections"] >= 0.2:
             acc.add(0.55, f"{net['slowConnections']} connections from this node are >3x slower than the same calls "
-                          f"from other nodes (RTT p95 {net.get('rttP95Ms') or 0:.1f} ms)", "network")
+                          f"from other nodes (RTT p95 {net.get('rttP95Ms') or 0:.1f} ms)", "network", "node-slow")
     if n.get("agentStale"):
-        acc.add(0.3, "Flow agent on this node stopped reporting", "telemetry")
+        acc.add(0.3, "Flow agent on this node stopped reporting", "telemetry", "agent-stale")
     if n.get("unschedulable"):
-        acc.add(0.2, "Cordoned (unschedulable)", "infrastructure")
+        acc.add(0.2, "Cordoned (unschedulable)", "infrastructure", "cordoned")
     custom = [t for t in n.get("taints") or [] if not t.startswith("node.kubernetes.io/")
               and not t.startswith("node-role.kubernetes.io/") and t.endswith((":NoSchedule", ":NoExecute"))]
     if custom:
-        acc.add(0.1, f"Tainted {', '.join(custom)} - only tolerating pods land here", "scheduling")
+        acc.add(0.1, f"Tainted {', '.join(custom)} - only tolerating pods land here", "scheduling", "taint")
     return acc.result()
 
 
@@ -293,7 +311,7 @@ def score_pod(p: dict, host: dict | None) -> None:
         return
     if p["phase"] == "Pending" and not p["node"]:
         bump("critical", f"Unschedulable: {p['message'] or p['reason']}")
-    elif p["reason"] in BAD_REASONS:
+    elif bad_reason(p["reason"]):
         bump("critical", p["reason"] + (f": {p['message']}" if p["message"] else ""))
     if host and not host.get("pseudo") and not host.get("ready"):
         bump("critical", f"On {host['name']}, which is {'unreachable' if host.get('readyStatus') == 'Unknown' else 'NotReady'}")
@@ -341,9 +359,13 @@ def score_graph(graph: dict, *, listen: dict | None = None, node_probe: dict | N
                                        (node_probe or {}).get(n["id"]))
         elif n["kind"] == "service":
             n["risk"] = {"score": 0.85, "level": "critical",
-                         "reasons": [{"weight": 0.85, "text": "Selector matches no ready pods", "category": "availability"}]}
+                         "reasons": [{"weight": 0.85, "text": "Selector matches no ready pods", "category": "availability",
+                                      "code": "svc-no-pods"}]}
         elif n["kind"] != "host":
-            n["risk"] = {"score": 0.0, "level": "ok", "reasons": []}
+            acc = _Acc()                       # routes / ingresses: wiring problems found by diagnose.py
+            for d in n.get("diag") or []:
+                acc.add(d["weight"], d["text"], d["category"], "diag")
+            n["risk"] = acc.result()
     for e in graph["edges"]:
         e["risk"] = score_edge(e, nodes)
 
@@ -452,8 +474,8 @@ def _cascades(graph: dict, nodes: dict, inbound: dict, host_of: dict) -> list[di
             stack.extend(e["source"] for e in inbound.get(nid, []) if degraded(e["source"]))
         if not seen:
             continue
-        user_facing = "clients" in seen or any(nodes[x]["kind"] == "entry" for x in seen)
-        seen.discard("clients")
+        user_facing = any(nodes[x]["kind"] in ("clients", "entry") for x in seen)
+        seen = {x for x in seen if nodes[x]["kind"] != "clients"}
         dominant = sorted(x for x in seen if nodes[x]["risk"].get("impactFrom") == root)
         out.append({"root": root, "kind": kind, "name": name, "score": score, "level": level, "reasons": reasons,
                     "impacted": sorted(seen), "dominant": dominant, "count": len(seen), "userFacing": user_facing,

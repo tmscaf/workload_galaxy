@@ -16,7 +16,7 @@ import random
 import time
 
 from .prom import MeshEdge
-from .scenarios import SCENARIOS, World
+from .scenarios import PRESETS, SCENARIOS, World
 
 HOSTS = [("ocp-worker-1", "10.0.1.11", "us-east-1a"), ("ocp-worker-2", "10.0.2.12", "us-east-1b"),
          ("ocp-worker-3", "10.0.3.13", "us-east-1c")]
@@ -68,7 +68,10 @@ CALLS = [
     ("data/order-worker", "data/orders-db", 20, 8, 110, 0.0, False),
 ]
 EXTERNAL_CALLS = [("payments/payments-api", "api.stripe.com", "198.51.100.20", 443, 140.0),
-                  ("identity/auth", "login.microsoftonline.com", "203.0.113.40", 443, 28.0)]
+                  ("identity/auth", "login.microsoftonline.com", "203.0.113.40", 443, 28.0),
+                  # on-prem systems: outside the cluster, inside the company network
+                  ("data/order-worker", "sftp.acme.internal", "10.20.4.15", 22, 1.8),
+                  ("payments/ledger", "mainframe-gw.acme.internal", "10.20.8.30", 1414, 2.4)]
 CONFIG_ONLY = [("storefront/recommendations", "data/events-kafka"),
                ("storefront/cart", "storefront/legacy-pricing")]
 
@@ -97,7 +100,9 @@ class DemoSource:
         self.objs = {k: [] for k in ("pods", "services", "endpointslices", "configmaps", "replicasets",
                                      "replicationcontrollers", "deployments", "statefulsets", "daemonsets", "jobs",
                                      "cronjobs", "ingresses", "hpas", "routes", "deploymentconfigs", "httproutes",
-                                     "nodes")}
+                                     "nodes", "events", "persistentvolumeclaims", "resourcequotas", "networkpolicies",
+                                     "controllerrevisions", "namespaces", "certificates", "clusteroperators",
+                                     "clusterversions", "machineconfigpools")}
         self.pod_ips: dict[str, list[tuple[str, str, str]]] = {}   # "ns/name" -> [(pod name, ip, uid)]
         self.svc_ip: dict[str, str] = {}
         self.port: dict[str, int] = {}
@@ -157,9 +162,25 @@ class DemoSource:
             owner = {"kind": kind, "name": name, "controller": True}
             if kind == "Deployment":
                 rs_name = f"{name}-{_h(key, 9)}"
+                revision = 3 + len(name) % 9
+                # catalog shipped a new version 38 minutes ago; everything else has been stable for weeks.
+                recent = key == "storefront/catalog"
                 self.objs["replicasets"].append({
-                    "metadata": {"name": rs_name, "namespace": ns, "ownerReferences": [owner]},
-                    "spec": {"replicas": replicas}})
+                    "metadata": {"name": rs_name, "namespace": ns, "ownerReferences": [owner],
+                                 "creationTimestamp": "AGO:2280" if recent else created,
+                                 "annotations": {"deployment.kubernetes.io/revision": str(revision)}},
+                    "spec": {"replicas": replicas, "template": template}})
+                if recent:
+                    old = {"metadata": {"labels": labels}, "spec": {"containers": [
+                        {**container, "image": "quay.io/acme/catalog:1.6.4",
+                         "env": [e for e in env if e["name"] != "OTEL_EXPORTER_OTLP_ENDPOINT"],
+                         "resources": {"limits": {"cpu": "1.0", "memory": "512Mi"},
+                                       "requests": container["resources"]["requests"]}}]}}
+                    self.objs["replicasets"].append({
+                        "metadata": {"name": f"{name}-{_h(key + 'old', 9)}", "namespace": ns, "ownerReferences": [owner],
+                                     "creationTimestamp": created,
+                                     "annotations": {"deployment.kubernetes.io/revision": str(revision - 1)}},
+                        "spec": {"replicas": 0, "template": old}})
                 owner = {"kind": "ReplicaSet", "name": rs_name, "controller": True}
             self.pod_ips[key] = []
             for i in range(replicas):
@@ -180,15 +201,30 @@ class DemoSource:
                     "containerStatuses": [{
                         "name": name, "restartCount": 37 if crash else (1 if key == "payments/fraud-check" else 0),
                         "state": {"waiting": {"reason": "CrashLoopBackOff"}} if crash else {"running": {}},
-                        "lastState": {"terminated": {"reason": "Error", "finishedAt": "RECENT"}} if crash else {},
+                        "lastState": {"terminated": {"reason": "Error", "exitCode": 1, "finishedAt": "RECENT"}}
+                        if crash else {},
                     }],
                 }
+                pod_spec = {"nodeName": host[0], "containers": [container]}
+                if kind == "StatefulSet":
+                    claim = f"data-{pname}"
+                    pod_spec["volumes"] = [{"name": "data", "persistentVolumeClaim": {"claimName": claim}}]
+                    self.objs["persistentvolumeclaims"].append({
+                        "metadata": {"name": claim, "namespace": ns, "creationTimestamp": created},
+                        "spec": {"storageClassName": "gp3-csi", "accessModes": ["ReadWriteOnce"],
+                                 "volumeName": f"pvc-{_h(claim, 8)}", "resources": {"requests": {"storage": "50Gi"}}},
+                        "status": {"phase": "Bound", "capacity": {"storage": "50Gi"}}})
                 self.objs["pods"].append({
                     "metadata": {"name": pname, "namespace": ns, "uid": uid, "labels": dict(labels),
                                  "ownerReferences": [owner], "creationTimestamp": created},
-                    "spec": {"nodeName": host[0], "containers": [container]},
+                    "spec": pod_spec,
                     "status": status,
                 })
+                if crash:
+                    self.objs["events"].append({
+                        "type": "Warning", "reason": "BackOff", "count": 212, "lastTimestamp": "AGO:45",
+                        "involvedObject": {"kind": "Pod", "namespace": ns, "name": pname},
+                        "message": f"Back-off restarting failed container {name} in pod {pname}"})
                 self.pod_ips[key].append((pname, ip, uid))
                 self.usage[f"{ns}/{pname}"] = (cpu_u, mem_u)
             pod_counter += replicas
@@ -217,6 +253,23 @@ class DemoSource:
         self.objs["routes"].append({"metadata": {"name": "public-api", "namespace": "storefront"},
                                     "spec": {"host": "api.acme.example", "to": {"kind": "Service", "name": "api-gateway"},
                                              "tls": {"termination": "reencrypt"}}})
+        for ns in sorted({w[0] for w in WORKLOADS}):
+            self.objs["namespaces"].append({"metadata": {"name": ns, "labels": {
+                "kubernetes.io/metadata.name": ns, "tier": "data" if ns == "data" else "apps"}}})
+        for op in ("authentication", "console", "dns", "etcd", "image-registry", "ingress", "kube-apiserver",
+                   "kube-controller-manager", "kube-scheduler", "machine-config", "monitoring", "network", "storage"):
+            self.objs["clusteroperators"].append({"metadata": {"name": op}, "status": {"conditions": [
+                {"type": "Available", "status": "True"}, {"type": "Degraded", "status": "False"},
+                {"type": "Progressing", "status": "False"}]}})
+        self.objs["clusterversions"].append({"metadata": {"name": "version"}, "status": {
+            "desired": {"version": "4.18.6"}, "conditions": [{"type": "Progressing", "status": "False"},
+                                                             {"type": "Failing", "status": "False"}]}})
+        self.objs["machineconfigpools"].append({"metadata": {"name": "worker"}, "status": {
+            "machineCount": 3, "updatedMachineCount": 3, "conditions": [{"type": "Updating", "status": "False"},
+                                                                        {"type": "Degraded", "status": "False"}]}})
+        self.objs["resourcequotas"].append({"metadata": {"name": "compute", "namespace": "payments"}, "status": {
+            "hard": {"limits.memory": "8Gi", "limits.cpu": "8", "pods": "20"},
+            "used": {"limits.memory": "4608Mi", "limits.cpu": "5500m", "pods": "6"}}})
         self.objs["hpas"].append({"metadata": {"name": "api-gateway", "namespace": "storefront"},
                                   "spec": {"scaleTargetRef": {"kind": "Deployment", "name": "api-gateway"},
                                            "minReplicas": 2, "maxReplicas": 3},
@@ -235,7 +288,7 @@ class DemoSource:
 
     def scenario_info(self) -> dict:
         guides = self.world.guides if self.world else {}
-        return {"active": self.active,
+        return {"active": self.active, "presets": PRESETS,
                 "available": [{"id": s.id, "title": s.title, "summary": s.summary, "layers": list(s.layers),
                                "guide": guides.get(s.id)} for s in SCENARIOS.values()]}
 
@@ -255,6 +308,10 @@ class DemoSource:
                 term = (c.get("lastState") or {}).get("terminated")
                 if term and term.get("finishedAt") == "RECENT":
                     term["finishedAt"] = recent
+        for kind in ("replicasets", "events", "jobs", "persistentvolumeclaims", "controllerrevisions", "nodes",
+                     "certificates", "routes", "ingresses"):
+            for obj in world.objs[kind]:
+                _stamp(obj)
         snap = {k: v for k, v in world.objs.items()}
         slices = []
         for svc in world.objs["services"]:
@@ -318,6 +375,8 @@ class DemoSource:
             slow *= self._node_factor(ready or dst_pods, w.slow_nodes) * self._node_factor(src_pods, src_net)
             slow *= w.mesh_slow.get(dst, 1.0)
             e = err + w.mesh_err.get(dst, 0.0)
+            if (src, dst) in w.blocked or ("*", dst) in w.blocked:
+                e, p50, p95 = 1.0, 3000, 5000                   # every call times out
             if dst_pods and not ready:
                 e, p50, p95 = max(e, 0.6), 3000, 5000           # every call times out
             elif dst_pods and len(ready) < len(dst_pods):
@@ -329,6 +388,36 @@ class DemoSource:
 
     def dns(self) -> dict[str, str]:
         return {ip: host for _src, host, ip, _port, _rtt in EXTERNAL_CALLS}
+
+    def pod_logs(self, ns: str, pod: str, container: str | None, previous: bool) -> list[str]:
+        """Plausible last lines for a demo pod, matched to the failure it is simulating."""
+        p = next((x for x in (self.world.objs["pods"] if self.world else []) if x["metadata"]["name"] == pod
+                  and x["metadata"]["namespace"] == ns), None)
+        if not p:
+            return []
+        app = p["metadata"]["labels"].get("app", "app")
+        cs = (p["status"].get("containerStatuses") or [{}])[0]
+        term = (cs.get("lastState") or {}).get("terminated") or {}
+        t = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - 95))
+        head = [f"{t}.102Z INFO  {app} starting (version {p['spec']['containers'][0]['image'].rsplit(':', 1)[-1]})",
+                f"{t}.240Z INFO  loading configuration from environment"]
+        if (cs.get("state") or {}).get("waiting", {}).get("reason") in ("ImagePullBackOff", "CreateContainerConfigError"):
+            return []                                              # the container never started: no log
+        if term.get("exitCode") == 127:
+            return [term.get("message") or "exec: command not found"]
+        if term.get("reason") == "OOMKilled":
+            return head + [f"{t}.911Z INFO  warming model cache (2.1 GiB)", f"{t}.990Z WARN  heap usage 96% of limit",
+                           "Killed"]
+        if term.get("exitCode") == 137:
+            return head + [f"{t}.800Z INFO  listening on :{self.port.get(f'{ns}/{app}', 8080)}",
+                           f"{t}.950Z WARN  request queue depth 412, worker pool exhausted",
+                           f"{t}.990Z INFO  received SIGTERM, shutting down"]
+        if term.get("exitCode"):
+            return head + [f"{t}.611Z ERROR failed to connect to index backend search-index.data.svc:9200: "
+                           "connection reset by peer", f"{t}.612Z ERROR startup check failed after 3 attempts",
+                           f"{t}.613Z FATAL exiting with code {term['exitCode']}"]
+        return head + [f"{t}.800Z INFO  listening on :{self.port.get(f'{ns}/{app}', 8080)}",
+                       f"{t}.950Z INFO  ready"]
 
     def agent_status(self) -> dict:
         from . import __build__, __version__
@@ -373,6 +462,8 @@ class DemoSource:
                     continue
                 q = int(8 + 10 * self._wave(20)) if key == "data/orders-db" else 0
                 ns["listen"].append({"ip": "0.0.0.0", "port": self.port[key], "queue": q, "backlog": 128})
+                if key == "openshift-ingress/router-default":
+                    ns["listen"].append({"ip": "0.0.0.0", "port": 80, "queue": 0, "backlog": 128})
 
         legacy = [(s, d, 1, 0, 0, 0, False) for s, d in CONFIG_ONLY if "legacy" in d]
         for src, dst, rps, *_ in CALLS + legacy:
@@ -383,7 +474,8 @@ class DemoSource:
                 ns = netns_for(sp)
                 if ns is None:
                     continue
-                if not ready_dst:   # nothing behind the Service: connects hang in SYN-SENT
+                if not ready_dst or (src, dst) in w.blocked or ("*", dst) in w.blocked:
+                    # nothing behind the Service, or the connection is dropped on the way: SYN-SENT
                     for _ in range(2 if dst in self.port else 1):
                         ns["sockets"].append({"lip": sp["status"]["podIP"], "lport": 40000 + rng.randint(0, 9999),
                                               "rip": dst_ip, "rport": dport, "state": "SYN-SENT", "dir": "out"})
@@ -427,6 +519,11 @@ class DemoSource:
                 {"proto": "tcp", "state": "ESTABLISHED", "src": f"198.18.{h}.{i}", "sport": 50000 + i,
                  "dst": "203.0.113.10", "dport": 443, "rsrc": r["status"]["podIP"], "rsport": 443, "bytes": None,
                  "bps": 20000.0} for i in range(12)]
+            if h == 0:   # and a few staff on the office network, which the agent can tell apart
+                by_node[node]["conntrack"] += [
+                    {"proto": "tcp", "state": "ESTABLISHED", "src": f"10.20.12.{i}", "sport": 51000 + i,
+                     "dst": "203.0.113.10", "dport": 443, "rsrc": r["status"]["podIP"], "rsport": 443, "bytes": None,
+                     "bps": 6000.0} for i in range(1, 4)]
         for r in routers:
             ns = netns_for(r)
             if ns is None:
@@ -441,6 +538,18 @@ class DemoSource:
         for rep in by_node.values():
             rep["netns"] = list(rep["netns"].values())
         return list(by_node.values())
+
+
+def _stamp(obj) -> None:
+    """Replace "AGO:<seconds>" placeholders with real timestamps, so demo data is always recent."""
+    from datetime import datetime, timedelta, timezone
+    items = obj.items() if isinstance(obj, dict) else enumerate(obj) if isinstance(obj, list) else ()
+    for k, v in items:
+        if isinstance(v, str) and v.startswith("AGO:"):
+            obj[k] = (datetime.now(timezone.utc) - timedelta(seconds=float(v[4:]))).isoformat(
+                timespec="seconds").replace("+00:00", "Z")
+        elif isinstance(v, (dict, list)):
+            _stamp(v)
 
 
 def _ready(pod: dict) -> bool:

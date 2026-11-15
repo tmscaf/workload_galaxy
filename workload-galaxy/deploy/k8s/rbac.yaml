@@ -19,8 +19,20 @@ rules:
   - apiGroups: [""]
     resources: [pods, services, endpoints, configmaps, nodes, namespaces, replicationcontrollers]
     verbs: [get, list, watch]
+  # Diagnostics: why a deployment is failing. Events carry the API server's, scheduler's and kubelet's
+  # own explanations; claims and quotas explain pods that never appear. (Pod logs are NOT granted here:
+  # see optional-pod-logs.yaml.)
+  - apiGroups: [""]
+    resources: [events, persistentvolumeclaims, resourcequotas]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch]
+  - apiGroups: [cert-manager.io]
+    resources: [certificates]
+    verbs: [get, list, watch]
   - apiGroups: [apps]
-    resources: [deployments, replicasets, statefulsets, daemonsets]
+    resources: [deployments, replicasets, statefulsets, daemonsets, controllerrevisions]
     verbs: [get, list, watch]
   - apiGroups: [batch]
     resources: [jobs, cronjobs]
@@ -50,6 +62,12 @@ rules:
   - apiGroups: [project.openshift.io]
     resources: [projects]
     verbs: [get, list]
+  - apiGroups: [config.openshift.io]
+    resources: [clusteroperators, clusterversions]
+    verbs: [get, list, watch]
+  - apiGroups: [machineconfiguration.openshift.io]
+    resources: [machineconfigpools]
+    verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

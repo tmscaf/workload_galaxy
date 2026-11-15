@@ -4,6 +4,93 @@ The version lives in [`VERSION`](VERSION). Every deploy adds a UTC build stamp
 (`0.3.0-20261111.2318`), shown in the UI's version chip, `/api/v1/version`, the
 image tag and the `app.kubernetes.io/version` label in Rancher.
 
+## 0.8.0
+- **Navigation**: Triage and Topology are separate sections in the top bar. Galaxy, Strata, Cascade
+  and Gibson are the views of Topology and only show there.
+- **Labels never overlap** in any topology view. Names are placed first by priority (selection,
+  then trouble, then landmarks): above the node, else below it, else the label steps aside until
+  you zoom or hover. Metrics lines appear only where there is room. Labels also keep clear of plane,
+  column, district and arm captions, and no label is clipped by the side rail in Cascade.
+- Topology shows rollout state on the node label ("rollout stuck", "rolling out"); tooltips show the
+  diagnosis and its next step; Gibson tower faces lead with the diagnosis and rollout.
+- **Showcase**: `scripts/demo-local.sh` runs a simulated cluster in Docker with curated failure
+  presets (also in the Simulate menu): a bad release day, wiring and network faults,
+  infrastructure trouble, one root cause with many victims. Scenario guides in the rail are
+  collapsible and say what Triage shows.
+- The collector now rolls out with `maxUnavailable: 0`: the running version keeps serving until
+  the new one has built its first snapshot, so a build that can't start never replaces one that
+  works (0.7.0 took the dashboard down for ten minutes because of `Recreate`).
+
+## 0.7.1
+- Fix: a warning event on a pod in a hidden namespace (such as this tool's own) crashed every
+  refresh, so 0.7.0 never became ready on a real cluster. Events for hidden workloads are ignored.
+
+## 0.7.0
+- **Triage view**: a troubleshooting dashboard. Verdict and platform strip, per-project
+  scorecards, problems grouped by root cause (each with *Why*, *Next*, evidence and copy-ready
+  `oc`/`kubectl` commands), sortable Workloads and Calls tables, and a "What changed" timeline.
+  The Triage tab shows the number of open problems in every view.
+- **Diagnostics engine** (`diagnose.py`): reads Events, rollout history, per-container state and
+  exit codes, PersistentVolumeClaims, ResourceQuotas, NetworkPolicies, Ingress/Route status,
+  Jobs, HPA conditions, cert-manager Certificates and OpenShift cluster operators, and explains:
+  stuck/failed rollouts (with what changed), image pull failures, crash loops by exit code,
+  missing ConfigMaps/Secrets, SCC / quota / webhook / LimitRange rejections, unschedulable pods,
+  unbound volumes, failing probes, Services that select nothing or target a port the pods don't
+  listen on, routes to missing Services, NetworkPolicies that block a call, failed jobs,
+  degraded platform operators. Symptoms are linked to their root cause.
+- Findings feed risk scoring, so the maps turn amber/red for problems that pod states alone
+  don't show (quota, storage, wiring, rejected routes).
+- Detail drawer: Diagnosis, latest rollout, warning events, storage claims, per-container state
+  with last exit code; optional log tail (`GALAXY_POD_LOGS`, off by default, extra RBAC).
+- API: `GET /api/v1/triage`, `GET /api/v1/logs`. Project summaries gain healthy/degraded/down,
+  pods ready, restarts, quota and top problem.
+- RBAC: the collector's ClusterRole now also reads events, persistentvolumeclaims,
+  resourcequotas, networkpolicies, controllerrevisions, cert-manager certificates and OpenShift
+  clusteroperators / clusterversions / machineconfigpools (all read-only; still no Secrets).
+- Init-container failures now count as the pod's state (`Init:CrashLoopBackOff`, as kubectl shows).
+- 12 new demo scenarios for deployment failures; the remembered view is restored on load.
+
+## 0.6.1
+- Gibson: the gold lines holding the internet plane now run from the gateway's pillars to the
+  plane's back corners. They used to rise from the plane's corners to the board's edge, and when
+  the plane was wider than the board one of them ended in empty space.
+
+## 0.6.0
+- **End users are split by where they come from.** When the node agent can see a connection's
+  real source address, private ones become *Users on your network* (green, inside the gateway, on
+  the your-network zone in Gibson); public ones stay *End users* on the internet. Where the source
+  is hidden (an external load balancer, SNAT) everything stays with End users. The drawer shows
+  where each group comes from and the source addresses recently seen.
+- Gibson: the internet plane has two labelled zones: **Internet · coming in** (end users) and
+  **Internet · called from the cluster** (the internet services your workloads connect out to).
+- Strata: the top plane is *Users & internet* when internet services sit there with the users.
+- Failure cascades count either group of users as "reaches users".
+
+## 0.5.1
+- Gibson overview framing measures what's actually on screen (board, internet plane, tower tops),
+  so the internet plane no longer slides under the side rail. The *Internet* label sits centred
+  on the plane's front edge.
+
+## 0.5.0
+- Gibson: an **internet gateway** arch on the board's front edge. The internet is its own plane
+  below and beyond the board, holding the end users and every internet service, so nothing on the
+  internet looks like it's on your network. All traffic between the cluster and the internet, in
+  either direction, runs through the arch (outbound calls such as a game server reaching its
+  players included). Your network's connectors stay on the board, inside the gateway.
+- Strata: internet services move up to the top plane with the end users (shown as *Internet*);
+  your network's dependencies stay on the services plane.
+
+## 0.4.2
+- External dependencies are classified by where they live: **your network** (private ranges,
+  internal names, or `GALAXY_INTERNAL_CIDRS`), **the internet**, or the cluster's own
+  infrastructure. Each has its own colour (green / gold / pale blue) in every view, on the node,
+  its label tag and the healthy calls into it; slow or failing calls keep amber/red.
+- Gibson: your-network connectors sit on a green zone at the rim, internet connectors on a gold
+  zone one row farther out. Cluster infrastructure joins the hosts along the back.
+- Cascade: separate *Your network (LAN)* and *Internet* columns, with wider gutters so long
+  hostnames don't run into the neighbouring column. Galaxy: the internet orbits farther out.
+- The detail drawer for an external dependency says where it lives and why.
+
 ## 0.4.1
 - Tower faces show only real data: risk and what it's inherited from, image, services, hosts,
   per-pod node/IP/QoS/CPU/memory/age/issues, callers, calls (latency, evidence, the config key

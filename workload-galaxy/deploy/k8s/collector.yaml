@@ -5,7 +5,9 @@ metadata:
   labels: {app.kubernetes.io/name: workload-galaxy, app.kubernetes.io/component: collector}
 spec:
   replicas: 1                     # state (agent reports) is in memory: keep a single replica
-  strategy: {type: Recreate}
+  # The running version keeps serving until the new one has built its first snapshot (/readyz):
+  # a build that can't start never replaces one that works.
+  strategy: {type: RollingUpdate, rollingUpdate: {maxSurge: 1, maxUnavailable: 0}}
   selector:
     matchLabels: {app.kubernetes.io/name: workload-galaxy, app.kubernetes.io/component: collector}
   template:

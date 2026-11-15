@@ -19,6 +19,49 @@ runs in an iframe and talks `postMessage`.
 
 ## What you see
 
+The top bar has two sections. **Triage** is the dashboard: what is wrong and what to
+do. **Topology** is the live map of the same cluster, with four views (Galaxy, Strata,
+Cascade, Gibson). The Triage button carries the number of open problems wherever you
+are, and *Show on map* on any problem jumps to it in the topology.
+
+**Triage** (start here when something is broken). One screen that answers *what is
+wrong, why, and what do I do*:
+
+- **Verdict and platform strip** — how many problems need attention, and whether the
+  cluster itself is healthy: nodes ready, node pressure, OpenShift cluster operators,
+  an upgrade or machine-config rollout in progress, and unhealthy platform components
+  (DNS, ingress, pod network). Platform trouble is shown whatever project filter is
+  set, because it explains failures inside projects.
+- **Projects** — one tile per project, worst first: workloads healthy / degraded /
+  down, pods ready, restarts in the last hour, a rollout in progress, quota usage,
+  and the top problem. Click a tile to scope everything to that project.
+- **Problems** — one card per thing that is wrong, root causes first. Each finding
+  says **Why** (the likely cause, in words) and **Next** (what to do), with the
+  evidence it is based on (the API server's, scheduler's or kubelet's own message)
+  and copy-ready `oc` / `kubectl` commands. Effects are folded under their cause
+  ("image can't be pulled" → "so: rollout stuck"), and downstream symptoms (slow or
+  failing callers) are folded under the root cause they clear with. Filter by
+  category: Rollout, Crashing, Image, Config, Admission, Quota, Scheduling, Storage,
+  Probes, Availability, Network, Latency & errors, Saturation, Nodes, Platform, Jobs.
+- **Workloads** — every workload in one sortable table: ready, latest rollout (state,
+  revision, age), restarts, CPU and memory against limits, requests/s, inbound p95
+  and error rate (what its callers experience), its slowest dependency, top issue.
+- **Calls** — every call, upstream → downstream: requests/s, connections, p50/p95,
+  5xx, network path RTT, retransmits / unanswered connects, evidence, and whether it
+  is a root cause or a symptom of something else.
+- **What changed** — rollouts (with what changed in the pod template: image, env
+  names, resources, probes), restarts with exit codes, warning events, node
+  transitions, autoscaler activity, failed jobs. Newest first: a recent change is
+  the first suspect.
+
+The Triage tab carries a badge with the number of open problems in every view, and
+every card has **Show on map** to jump to the same thing in the topology.
+
+Clicking anything opens the detail drawer, which now also shows the **Diagnosis**
+for that workload or call, its **latest rollout**, **warning events**, **storage
+claims**, and, for a pod, each container's state, last exit code and reason (and
+its last log lines, if you enable that; see Security).
+
 **Galaxy.** End users glow at the core. Each namespace/project is a spiral arm;
 the dotted orbits are call depth (entry → services → their dependencies → …),
 with external dependencies on the outer rim. Workloads are stars sized by pod
@@ -27,14 +70,14 @@ direction** — density is throughput, colour is latency risk, and high-latency
 calls visibly crawl. Dashed links are dependencies inferred from config with no
 traffic observed yet.
 
-**Strata.** The same graph as stacked planes: End users, Services, Pods &
-containers, Hosts, with dashed drop-lines from each workload to its pods and
+**Strata.** The same graph as stacked planes: End users (called *Internet* when
+internet services sit there with them), Services, Pods & containers, Hosts, with dashed drop-lines from each workload to its pods and
 from pods to the node they run on. Click anything to light its whole path from
 users to hosts.
 
 **Cascade.** The call graph as a left-to-right waterfall of columns: End users,
-then one column per call hop, then External dependencies, then Infrastructure
-(hosts). Each column steps down and back. Requests flow left to right. On top,
+then one column per call hop, then Your network (LAN), Internet, then
+Infrastructure (hosts). Each column steps down and back. Requests flow left to right. On top,
 every **failure cascade** is drawn: a light pillar on each root cause, and red
 shock pulses travelling *backwards* along the calls (and from a sick host into
 the workloads on it) to everything it is slowing down. The rail lists cascades
@@ -45,10 +88,30 @@ for 11, reaches users"); click one to isolate it.
 workload is a glass tower standing on a plinth, with one floor per pod: amber/red
 when failing, dashed above the roof when the scheduler can't place it. Projects are
 districts, and calls run as right-angle circuit traces along the streets with
-pulses in request direction. End users enter through a gate, external dependencies
-plug into edge connectors on the rim, and hosts sit along the back. Tower faces
+pulses in request direction. An **internet gateway** arch stands on the board's front
+edge: beyond it, on its own lower plane off the board, is the internet, with end users
+in a *coming in* zone and the internet services your workloads call in a *called
+from the cluster* zone beside them. Every
+call between the cluster and the internet, in either direction, runs through the
+arch. Your own network stays inside: its connectors sit on a green zone at the
+board's right rim. Hosts sit along the back. Tower faces
 scroll that workload's live telemetry and issue cards. Click a tower (or a floor,
 to pick a pod) to bring it front and center.
+
+**Where an external dependency lives.** Everything outside the cluster is
+classified and coloured the same way in every view: **green = your network**
+(private address ranges, `GALAXY_INTERNAL_CIDRS`, or internal names such as
+`*.internal`, `*.local`, `*.corp`), **gold = the internet** (public addresses and
+public hostnames), **pale blue = the cluster's own infrastructure** (API server,
+node services). Healthy calls fade from cyan into that colour; slow or failing
+calls stay amber/red so problems still stand out. The detail drawer says why each
+one was classified as it was.
+
+**End users vs users on your network.** Inbound traffic is split the same way when
+the node agent can see the real source address: private addresses become *Users on
+your network* (green, drawn inside the gateway), public ones stay *End users* on the
+internet. Behind an external load balancer or SNAT the source is hidden, so those
+users stay with End users.
 
 **Colour language.** Cyan→violet = healthy flow (gradient runs source → target),
 amber = elevated, red = latency/failures. A dashed amber/red ring around a
@@ -76,6 +139,32 @@ a Service with no backing pods becomes its own red node. Ingress traffic is
 routed through the ingress controller / OpenShift router when one is detected.
 Only *where* a config reference was found is reported (`env DATABASE_URL`,
 `configmap app:application.yaml`) — never the value. Secrets are never read.
+
+### What Triage can diagnose
+
+| Category | Detected | From |
+|---|---|---|
+| Rollout | stuck or failed rollouts (Deployment, StatefulSet, DaemonSet, DeploymentConfig), with the revision, how long ago, and what changed | ReplicaSets / ControllerRevisions / RCs, rollout conditions |
+| Image | tag doesn't exist, registry refuses access (pull secret), registry unreachable, untrusted certificate, rate limit, wrong architecture | container state + `Failed` events |
+| Crashing | crash loops with the exit code translated (1 app error, 126/127 bad command, 137 killed, 139 segfault, 143 terminated, OOMKilled with the limit), init-container failures | container last state |
+| Config | missing ConfigMap / Secret / key (with the likely typo), container can't be created, volume references that don't exist | container state, `FailedMount` events |
+| Admission | pod rejected by SCC / Pod Security, admission webhook, LimitRange, missing ServiceAccount | `FailedCreate` events, `ReplicaFailure` condition |
+| Quota | ResourceQuota exhausted or above 90%, and the workloads it is blocking | ResourceQuotas + events |
+| Scheduling | why a pod is Pending: insufficient CPU/memory, taints, node selector / affinity, anti-affinity, unbound claim, cordoned nodes, pod limit | scheduler message |
+| Storage | claims not bound (missing StorageClass, no default class, provisioner failing), lost volumes, Multi-Attach, attach/mount failures | PVCs + events |
+| Probes | readiness / startup probe failing (refused, 404, 5xx, timeout) and containers killed by a liveness probe; compares the probe port with the ports the pod really listens on | `Unhealthy` events + agent |
+| Availability | no ready pods, stuck in ContainerCreating / init / Terminating | pod status |
+| Network | Service selects no pods; Service targetPort the pods don't listen on; Ingress/Route pointing at a missing Service or port; Route not admitted; Ingress without a controller; NetworkPolicy that blocks a call; certificates expiring or not issued; unanswered connects, retransmits | Services, EndpointSlices, Ingress/Route status, NetworkPolicies, cert-manager, agent |
+| Latency & errors | slow or failing calls, each marked as a root cause or as a symptom of the dependency behind it | mesh metrics, agent |
+| Saturation | CPU throttling, memory near limit, accept queue full, unread socket data, autoscaler at max or unable to scale | metrics.k8s.io, agent, HPA status |
+| Nodes | NotReady, memory/disk/PID pressure, reservations exhausted, packet loss on one node, cordoned | Nodes + agent |
+| Platform | OpenShift cluster operators degraded or unavailable, cluster upgrade, MachineConfigPool updating or degraded | config.openshift.io |
+| Jobs | failed Jobs and CronJob runs (finished pods aren't on the maps) | Job conditions |
+| Hygiene | no readiness probe, no memory limit, no requests, `:latest` tags, single replica (information only, hidden by default) | pod templates |
+
+It does not read Secrets, and it only reports what the API states: a finding's
+*Why* is the most likely cause for that signal, and the evidence quoted under it
+is the cluster's own message, so you can check it.
 
 ### Latency / risk signals
 
@@ -111,6 +200,22 @@ Scores combine with noisy-OR per node/edge. Each workload also carries an
 
 ## Run it
 
+### Showcase on your machine (Docker, no cluster)
+
+```sh
+scripts/demo-local.sh              # "A bad release day": six deployments failing six different ways
+scripts/demo-local.sh network      # wiring and network faults
+scripts/demo-local.sh infrastructure
+scripts/demo-local.sh cascade      # one root cause, many victims
+scripts/demo-local.sh stop
+```
+
+It builds the image, runs it in demo mode on http://127.0.0.1:8099 and opens the Triage
+view. The cluster is simulated, but everything runs through the real detector, so what
+you see is what the board would say about a real cluster in that state. The **Simulate**
+menu in the top bar has the same four presets plus all 22 single scenarios, and the left
+rail explains what each active scenario should show.
+
 ### Demo (no cluster)
 
 ```bash
@@ -145,7 +250,21 @@ the root cause appears marked.
 | Stuck rollout | Pods | one ImagePullBackOff hex, two images on the workload, traffic unaffected |
 | Database outage cascade | Services, Users | DB critical, unanswered connects from callers, impact propagates to user paths, hosts green |
 
-Link straight to one: `/?view=strata&scenario=memory-pressure&select=host:ocp-worker-2`.
+| Deploy fails: missing ConfigMap | Triage | rollout stuck ← ConfigMap missing, with the similarly named one that exists |
+| Deploy fails: crash on start | Triage, Pods | exit 127 translated to "command not found", container's last message |
+| Deploy fails: project quota | Triage | no new pods at all (nothing to see on the maps); the API server's quota message |
+| Deploy fails: security policy (SCC) | Triage | rollout stuck at 0 new pods ← pod rejected by SCC |
+| Deploy fails: volume not provisioned | Triage, Hosts | claim not bound (StorageClass doesn't exist) → pod unschedulable |
+| Deploy fails: readiness probe | Triage, Pods | rollout failed (ProgressDeadlineExceeded) ← probe gets HTTP 404 |
+| Liveness probe kills the app | Triage, Pods | restarts with exit 137 explained by liveness-probe events, not an app crash |
+| Service points at the wrong port | Triage, Services | pods all green, every call fails; pods listen on 8080, Service targets 8081 |
+| NetworkPolicy blocks callers | Triage, Services | three callers from other projects cut off, one in the same tier still works |
+| Route misconfigured | Triage, Users | route to a Service that doesn't exist; route not admitted (HostAlreadyClaimed) |
+| CronJob run failed | Triage | last run hit its backoff limit |
+| Platform: operator degraded + node update | Triage | platform strip: operator degraded, pool updating, node cordoned |
+
+Link straight to one: `/?view=triage&scenario=bad-rollout` or
+`/?view=strata&scenario=memory-pressure&select=host:ocp-worker-2`.
 API: `GET/PUT /api/v1/demo/scenarios` (`{"active": [...]}`); preset with
 `GALAXY_DEMO_SCENARIOS=a,b`. Not available outside demo mode.
 
@@ -219,6 +338,9 @@ An open page notices a redeploy and offers a reload.
 | `GALAXY_PROBE_INTERVAL_SECONDS` | `60` | |
 | `GALAXY_PROBE_SKIP_PORTS` | DB/broker ports | never probed: closing a socket pre-handshake counts as a connection error on MySQL and friends |
 | `GALAXY_RESOLVE_EXTERNAL_HOSTS` | `true` | DNS-resolve config hostnames so observed external IPs get names |
+| `GALAXY_EVENT_WINDOW_SECONDS` | `3600` | warning events older than this are ignored |
+| `GALAXY_POD_LOGS` | `false` | let the drawer fetch the last 80 log lines of a container (also needs `deploy/k8s/optional-pod-logs.yaml`) |
+| `GALAXY_INTERNAL_CIDRS` | | extra ranges to count as *your network* (e.g. a company's public blocks); RFC 1918, CGNAT, link-local and ULA are always internal |
 
 Agent: `GALAXY_COLLECTOR_URL`, `GALAXY_AGENT_TOKEN`, `GALAXY_AGENT_INTERVAL` (10s), `GALAXY_CA_FILE`.
 
@@ -233,6 +355,8 @@ All paths are relative, so the service works behind a path prefix (mount it at
 | `GET /api/v1/namespaces` | per namespace: workloads, pods, warning/critical counts, `platform` flag |
 | `GET /api/v1/topology?ns=a,b&platform=true` | the graph: `nodes`, `edges`, `hotspots`, `paths`, `cascades`, `sources` |
 | `GET /api/v1/hotspots?ns=…` | hotspots, riskiest paths and failure cascades |
+| `GET /api/v1/triage?ns=…&severity=warning` | the Triage view as data: `findings` (each with `severity`, `category`, `title`, `cause`, `fix`, `commands`, `evidence`, `root`, `causedBy`, `effectOf`, `blast`, `userFacing`), `projects` scorecards, `changes`, `platform`, `counts` |
+| `GET /api/v1/logs?ns=&pod=&container=&previous=` | last log lines of one container; 403 unless `GALAXY_POD_LOGS=true` |
 | `POST /api/v1/agent/report` | agent ingest (`Authorization: Bearer <token>`, gzip OK) |
 | `GET /healthz`, `/readyz` | probes |
 
@@ -245,7 +369,7 @@ With `ns` set, neighbours outside the selection are included with
 <iframe src="https://galaxy.example/?embed=1&ns=payments&view=strata"></iframe>
 ```
 
-URL params: `ns`, `platform=1`, `view=galaxy|strata|cascade|gibson`, `select=<node id>`,
+URL params: `ns`, `platform=1`, `view=triage|galaxy|strata|cascade|gibson`, `select=<node id>`,
 `embed=1` (compact chrome), `rail=0` (hide left rail), `api=<collector base URL>`.
 
 Messages out (`event.data.source === 'workload-galaxy'`): `{type:'ready'}`,
@@ -262,7 +386,16 @@ Node ids: `wl:<ns>/<Kind>/<name>`, `entry:<ns>/<Kind>/<name>`, `svc:<ns>/<name>`
 ## Security
 
 - Collector RBAC is read-only cluster-wide and excludes Secrets. Pod templates
-  (which can hold env values) never leave the process.
+  (which can hold env values) never leave the process; rollout diffs name the env
+  variables that changed, never their values.
+- Diagnostics read Events, PersistentVolumeClaims, ResourceQuotas, NetworkPolicies,
+  ControllerRevisions and (OpenShift) cluster operators. Event and status messages
+  are shown as the API serves them.
+- **Pod logs are off by default.** Reading them needs an extra ClusterRole
+  (`deploy/k8s/optional-pod-logs.yaml`) and `GALAXY_POD_LOGS=true`. Logs can hold
+  data that configuration never shows, and the dashboard serves them to anyone who
+  can open it, so put it behind a login first. Only pods the collector already
+  shows can be read, 80 lines at a time.
 - The agent is privileged with `hostPID` — it reads socket and conntrack
   metadata only, captures no payloads, writes nothing to the node, and has no
   Kubernetes API access. Reports are authenticated with a shared token.

@@ -48,6 +48,9 @@ class Settings:
     probe_interval_seconds: int = 60
     probe_skip_ports: set[int] = field(default_factory=set)
     resolve_external_hosts: bool = True
+    internal_cidrs: list[str] = field(default_factory=list)
+    event_window_seconds: int = 3600
+    pod_logs: bool = False
     web_root: str = ""
     log_level: str = "INFO"
 
@@ -74,6 +77,12 @@ def load_settings() -> Settings:
         probe_interval_seconds=max(15, _int("GALAXY_PROBE_INTERVAL_SECONDS", 60)),
         probe_skip_ports={int(p) for p in _list("GALAXY_PROBE_SKIP_PORTS", DEFAULT_PROBE_SKIP_PORTS) if p.isdigit()},
         resolve_external_hosts=_bool("GALAXY_RESOLVE_EXTERNAL_HOSTS", True),
+        # Extra address ranges to treat as your own network (e.g. corporate public blocks).
+        internal_cidrs=_list("GALAXY_INTERNAL_CIDRS"),
+        # Warning events older than this no longer explain the present.
+        event_window_seconds=max(300, _int("GALAXY_EVENT_WINDOW_SECONDS", 3600)),
+        # Off by default: serving log tails widens what the dashboard can reveal (needs pods/log RBAC).
+        pod_logs=_bool("GALAXY_POD_LOGS", False),
         web_root=os.environ.get("GALAXY_WEB_ROOT", default_web),
         log_level=os.environ.get("GALAXY_LOG_LEVEL", "INFO").upper(),
     )

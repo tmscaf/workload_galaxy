@@ -2,7 +2,7 @@
 //
 // URL parameters (all optional):
 //   ns=a,b        namespaces / projects to show        platform=1  include platform namespaces
-//   view=strata|cascade  start in another view             select=<id> preselect a node
+//   view=triage|strata|cascade|gibson  start in another view   select=<id> preselect a node
 //   embed=1       compact chrome for iframes           rail=0      hide the left rail
 //   api=<url>     collector base URL (default: same origin and path as this page)
 //
@@ -10,6 +10,7 @@
 // accepts {type:'workload-galaxy:command', command:'select'|'setNamespaces'|'setView'|'clear', ...}.
 import { GalaxyScene } from './scene.js';
 import { UI } from './ui.js';
+import { Triage } from './triage.js';
 
 const params = new URLSearchParams(location.search);
 // The build of the code this tab is running (from its own versioned URL /v/<build>/js/main.js).
@@ -19,10 +20,13 @@ const embedded = params.get('embed') === '1';
 if (embedded) document.body.classList.add('embed');
 if (params.get('rail') === '0') document.body.classList.add('rail-hidden');
 
+const VIEW_NAMES = ['triage', 'galaxy', 'strata', 'cascade', 'gibson'];
 const state = {
   namespaces: params.get('ns') ? params.get('ns').split(',').filter(Boolean) : loadPref('ns', null),
   platform: params.has('platform') ? params.get('platform') === '1' : loadPref('platform', false),
-  view: ['strata', 'cascade', 'gibson'].includes(params.get('view')) ? params.get('view') : 'galaxy',
+  // The view from the URL, else the one used last time (someone who lives in Triage lands in Triage).
+  view: VIEW_NAMES.includes(params.get('view')) ? params.get('view') : VIEW_NAMES.includes(loadPref('view', '')) ? loadPref('view', '') : 'galaxy',
+  mapView: 'galaxy',
   selection: null,
   graph: null,
   meta: null,
@@ -43,9 +47,37 @@ const ui = new UI({
   },
   onSelect(sel, focus) { select(sel, focus); },
   onView(v) { setView(v); },
+  onSection(s) { setView(s === 'triage' ? 'triage' : state.mapView); },
   onOptions(o) { scene.setOptions(o); },
   onClear() { select(null); },
   onScenarios(ids) { applyScenarios(ids); },
+  async fetchLogs(ns, pod, container, previous) {
+    const q = new URLSearchParams({ ns, pod, previous: previous ? 'true' : 'false' });
+    if (container) q.set('container', container);
+    return getJSON('api/v1/logs?' + q.toString());
+  },
+  copy: copyText,
+});
+
+function copyText(text) {
+  // navigator.clipboard needs a secure context; dashboards are often plain http on a LAN.
+  if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).catch(() => {}); return; }
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); } catch { /* nothing else to try */ }
+  ta.remove();
+}
+
+const triage = new Triage(document.getElementById('triage'), {
+  onSelect(sel) { select(sel, false); },
+  onShowOnMap(sel) { setView(state.mapView === 'triage' ? 'galaxy' : state.mapView); select(sel, true); },
+  onProject(ns) { ui.ctx.onNamespaces([ns], state.platform); },
+  async onPlatformNode(id) {      // platform workloads are outside the default filter: bring them in, then open it
+    if (!state.platform) { state.platform = true; savePref('platform', true); ui.setNamespaces(state.allNamespaces, state.namespaces, true); await load(); }
+    select({ type: 'node', id }, false);
+  },
+  copy: copyText,
 });
 
 async function applyScenarios(ids) {
@@ -80,13 +112,23 @@ function applyInsets(instant = false) {
 window.addEventListener('resize', () => applyInsets(true));
 applyInsets(true);
 
-function setView(v) {
-  if (state.view === v) return;
-  state.view = v;
+function applyView(v) {
   document.body.classList.toggle('view-cascade', v === 'cascade');
   document.body.classList.toggle('view-gibson', v === 'gibson');
+  document.body.classList.toggle('view-triage', v === 'triage');
+  document.getElementById('triage').hidden = v !== 'triage';
   ui.setView(v);
-  scene.setView(v);
+  scene.setPaused(v === 'triage');           // nothing to draw behind the dashboard
+  if (v === 'triage') { ui.tooltip(null); triage.render(state.graph, state.meta); } else { state.mapView = v; scene.setView(v); }
+}
+
+function setView(v) {
+  if (!VIEW_NAMES.includes(v)) v = 'galaxy';
+  if (state.view === v) return;
+  state.view = v;
+  savePref('view', v);
+  applyView(v);
+  applyInsets(true);
   syncUrl();
 }
 
@@ -94,9 +136,10 @@ function select(sel, focus) {
   state.selection = sel;
   scene.setSelection(sel);
   ui.renderDrawer(sel);
+  document.body.classList.toggle('drawer-open', !document.getElementById('drawer').hidden);
   applyInsets();
   if (state.graph) ui.renderRail(state.graph, scene.layerCounts(), sel);
-  if (sel && focus) {
+  if (sel && focus && state.view !== 'triage') {
     if (sel.type === 'node') scene.focus(sel.id);
     else if (sel.type === 'pod') scene.focus(sel.wid || sel.key.split('#')[0]);
     else if (sel.type === 'edge') scene.focus(sel.id.split('->')[1]);
@@ -174,7 +217,11 @@ async function load() {
       select({ type: 'node', id: params.get('select') }, true);
     }
     ui.renderRail(graph, scene.layerCounts(), state.selection);
-    ui.renderDrawer(state.selection);
+    ui.meta = meta;
+    ui.renderDrawer(state.selection, true);
+    document.body.classList.toggle('drawer-open', !document.getElementById('drawer').hidden);
+    ui.setTriageBadge(Triage.badge(graph));
+    if (state.view === 'triage') triage.render(graph, meta);
     applyInsets();
     ui.toast(meta.error ? `Last refresh failed: ${meta.error}` : null);
     if (!state._ready) { state._ready = true; post({ type: 'ready' }); }
@@ -219,14 +266,11 @@ window.addEventListener('message', (ev) => {
   if (!m || m.type !== 'workload-galaxy:command') return;
   if (m.command === 'select') select(m.id ? { type: 'node', id: m.id } : null, true);
   else if (m.command === 'clear') select(null);
-  else if (m.command === 'setView') setView(['strata', 'cascade', 'gibson'].includes(m.view) ? m.view : 'galaxy');
+  else if (m.command === 'setView') setView(m.view);
   else if (m.command === 'setNamespaces') ui.ctx.onNamespaces(m.namespaces ?? null, !!m.platform);
 });
 
-document.body.classList.toggle('view-cascade', state.view === 'cascade');
-document.body.classList.toggle('view-gibson', state.view === 'gibson');
-ui.setView(state.view);
-scene.setView(state.view);
+applyView(state.view);
 load();
 (function poll() {
   setTimeout(async () => { await load(); poll(); }, state.refreshSeconds * 1000);

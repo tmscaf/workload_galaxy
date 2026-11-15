@@ -153,3 +153,37 @@ def test_open_but_idle_connection_is_marked_idle():
     g = Builder(snap, reports=reports).build()
     e = edge(g, "wl:identity/Deployment/auth", "wl:identity/StatefulSet/session-cache")
     assert e["traffic"]["idle"] and e["traffic"]["lastActiveS"] == 1500 and e["traffic"]["level"] == 0
+
+
+def test_external_dependencies_are_classified_by_where_they_live():
+    """Your network (private ranges, internal names) vs the internet vs the cluster's own infrastructure."""
+    src = DemoSource()
+    snap = src.snapshot()
+    reports = src.reports()
+    g = Builder(snap, reports=reports, ext_dns=src.dns()).build()
+    scope = {n["name"]: n["scope"] for n in g["nodes"] if n["kind"] == "external"}
+    assert scope["api.stripe.com"] == "internet" and scope["sftp.acme.internal"] == "lan"
+    # an observed LAN device (by IP) and a public one
+    host_pod = src.pod_ips["storefront/search"][0]
+    reports[0]["conntrack"] = [
+        {"proto": "udp", "state": "", "src": host_pod[1], "dst": "192.168.1.116", "dport": 2456, "idleS": 3},
+        {"proto": "udp", "state": "", "src": host_pod[1], "dst": "198.51.100.57", "dport": 27019, "idleS": 3}]
+    g = Builder(snap, reports=reports, ext_dns=src.dns()).build()
+    scope = {n["name"]: n["scope"] for n in g["nodes"] if n["kind"] == "external"}
+    assert scope["192.168.1.116"] == "lan" and scope["198.51.100.57"] == "internet"
+    # a company's own public block can be declared internal
+    g = Builder(snap, reports=reports, ext_dns=src.dns(), internal_cidrs=["198.51.0.0/16"]).build()
+    assert {n["name"]: n["scope"] for n in g["nodes"] if n["kind"] == "external"}["198.51.100.57"] == "lan"
+
+
+def test_inbound_users_are_split_by_where_they_come_from():
+    """Users whose source address the agent sees as private are your network's users, not the internet's."""
+    g = build_demo()
+    n = by_id(g)
+    assert n["clients"]["scope"] == "internet" and n["clients:lan"]["scope"] == "lan"
+    assert all(ip.startswith("10.20.12.") for ip in n["clients:lan"]["seenFrom"])
+    router = "wl:openshift-ingress/Deployment/router-default"
+    assert edge(g, "clients:lan", router)["type"] == "exposes"
+    assert "declared" in edge(g, "clients", router)["evidence"]          # exposure stays with End users
+    # a cascade reaching either kind of user is user-facing, and users never count as its blast radius
+    assert all(not c["impacted"] or not any(x.startswith("clients") for x in c["impacted"]) for c in g["cascades"])

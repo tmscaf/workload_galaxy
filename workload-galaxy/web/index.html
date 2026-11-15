@@ -21,7 +21,12 @@
       <span id="version" class="chip subtle version" hidden></span>
       <span id="cluster" class="chip subtle"></span>
     </div>
-    <div class="seg" role="tablist" aria-label="View">
+    <nav class="sections" aria-label="Section">
+      <button data-section="triage" title="What is wrong, why, and what to do about it">Triage<span id="triageBadge" class="badge" hidden></span></button>
+      <button data-section="topology" title="The workloads, their calls and where latency starts, as a live map">Topology</button>
+    </nav>
+    <div class="seg" id="viewSeg" role="tablist" aria-label="Topology view">
+      <span class="eyebrow">View</span>
       <button data-view="galaxy" class="on" role="tab">Galaxy</button>
       <button data-view="strata" role="tab">Strata</button>
       <button data-view="cascade" role="tab">Cascade</button>
@@ -51,6 +56,7 @@
       <div id="scenarioMenu" class="glass menu wide" hidden>
         <div class="menu-head"><span class="menu-title">Fault scenarios (demo cluster)</span>
           <div class="menu-actions"><button id="scenarioClear" class="link">Reset to baseline</button></div></div>
+        <div id="scenarioPresets" class="presets"></div>
         <ul id="scenarioList"></ul>
       </div>
     </div>
@@ -79,6 +85,8 @@
     </section>
   </aside>
 
+  <main id="triage" class="glass" hidden aria-label="Triage dashboard"></main>
+
   <aside id="drawer" class="glass" hidden>
     <button id="drawerClose" class="icon-btn" aria-label="Close details">×</button>
     <div id="drawerBody"></div>
@@ -90,7 +98,9 @@
       <span class="sw" style="--c:var(--warn)"></span>elevated latency
       <span class="sw" style="--c:var(--crit)"></span>latency / failures
       <span class="sw dashed"></span>inferred from config
-      <span class="legend-gibson">tower = workload · floor = pod (amber/red = failing, dashed = unscheduled) · traces = calls</span>
+      <span class="sw" style="--c:#5ee6a8"></span>to your network (LAN)
+      <span class="sw" style="--c:#ffd75e"></span>to the internet
+      <span class="legend-gibson">tower = workload · floor = pod (amber/red = failing, dashed = unscheduled) · traces = calls · arch = internet gateway (the internet is the plane beyond it)</span>
       <span class="legend-cascade"><span class="sw" style="--c:var(--crit)"></span>◀ impact flowing back from a root cause</span>
     </div>
     <div class="legend-row toggles">

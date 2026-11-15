@@ -1,0 +1,29 @@
+# OPTIONAL - not part of the kustomization. Apply only if you want the dashboard to show the last
+# log lines of a failing container (the fastest way to see why it crashes).
+#
+# Think before enabling: logs can contain data that configuration never shows, and the dashboard
+# serves them to anyone who can open it. Put the dashboard behind your suite's login first.
+#
+#   kubectl apply -f deploy/k8s/optional-pod-logs.yaml
+#   kubectl -n workload-galaxy set env deploy/workload-galaxy GALAXY_POD_LOGS=true
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: workload-galaxy-pod-logs
+rules:
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: workload-galaxy-pod-logs
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: workload-galaxy-pod-logs
+subjects:
+  - kind: ServiceAccount
+    name: workload-galaxy
+    namespace: workload-galaxy

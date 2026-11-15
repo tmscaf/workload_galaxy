@@ -16,7 +16,8 @@ export class UI {
 
   // ------------------------------------------------------------------ top bar
   _bindTop() {
-    document.querySelectorAll('.seg button').forEach((b) => b.addEventListener('click', () => this.ctx.onView(b.dataset.view)));
+    document.querySelectorAll('#topbar .seg button').forEach((b) => b.addEventListener('click', () => this.ctx.onView(b.dataset.view)));
+    document.querySelectorAll('#topbar .sections button').forEach((b) => b.addEventListener('click', () => this.ctx.onSection(b.dataset.section)));
     const btn = $('#nsButton'), menu = $('#nsMenu');
     btn.addEventListener('click', (ev) => {
       ev.stopPropagation();
@@ -84,8 +85,15 @@ export class UI {
     if (!info) { $('#scenarioGuide').hidden = true; return; }
     const active = new Set(info.active);
     const LC = { users: '#4fd1ff', services: '#4f7dff', pods: '#8b5cf6', hosts: '#19c9a0' };
-    $('#scenarioSummary').textContent = !info.active.length ? 'Baseline'
+    const same = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
+    const preset = (info.presets || []).find((p) => same(p.scenarios, info.active));
+    $('#scenarioSummary').textContent = !info.active.length ? 'Baseline' : preset ? preset.title
       : info.active.length === 1 ? info.available.find((s) => s.id === info.active[0]).title : `${info.active.length} scenarios`;
+    $('#scenarioPresets').innerHTML = (info.presets || []).map((p) => `<button class="preset ${same(p.scenarios, info.active) ? 'on' : ''}" data-preset="${esc(p.id)}">
+      <b>${esc(p.title)}</b><span>${esc(p.summary)}</span></button>`).join('');
+    $('#scenarioPresets').querySelectorAll('[data-preset]').forEach((b) => b.addEventListener('click', () => {
+      this.ctx.onScenarios(info.presets.find((p) => p.id === b.dataset.preset).scenarios);
+    }));
     $('#scenarioList').innerHTML = info.available.map((s) => `<li><label>
       <input type="checkbox" data-id="${esc(s.id)}" ${active.has(s.id) ? 'checked' : ''}>
       <span class="sc-title">${esc(s.title)}</span><span class="sc-sum">${esc(s.summary)}</span>
@@ -100,10 +108,11 @@ export class UI {
     const act = info.available.filter((s) => active.has(s.id) && s.guide);
     guide.hidden = !act.length;
     const ORDER = [['users', 'End users'], ['services', 'Services'], ['pods', 'Pods & containers'], ['hosts', 'Hosts']];
-    guide.innerHTML = `<h2>What to look for</h2>` + act.map((s) => `<div class="guide">
-      <div class="gt">${esc(s.title)}<button class="link" data-focus="${esc(s.guide.focus || '')}">Show in strata</button></div>
+    guide.innerHTML = `<h2>What to look for <span class="hint">${act.length > 1 ? 'click one to expand' : ''}</span></h2>` + act.map((s) => `<details class="guide" ${act.length === 1 ? 'open' : ''}>
+      <summary><div class="gt">${esc(s.title)}<button class="link" data-focus="${esc(s.guide.focus || '')}">Show in strata</button></div></summary>
+      ${s.guide.triage ? `<div class="gtri"><b>Triage</b>${esc(s.guide.triage)}</div>` : ''}
       <ol>${ORDER.map(([k, label]) => `<li class="${s.layers.includes(k) ? 'root' : ''}" style="--c:${LC[k]}"><span class="bar"></span>
-        <span><b>${label}</b>${esc(s.guide.layers[k] || '')}</span></li>`).join('')}</ol></div>`).join('');
+        <span><b>${label}</b>${esc(s.guide.layers[k] || '')}</span></li>`).join('')}</ol></details>`).join('');
     guide.querySelectorAll('[data-focus]').forEach((b) => b.addEventListener('click', () => {
       this.ctx.onView('strata');
       if (b.dataset.focus) this.ctx.onSelect({ type: 'node', id: b.dataset.focus }, true);
@@ -111,7 +120,20 @@ export class UI {
   }
 
   setView(view) {
-    document.querySelectorAll('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.view === view));
+    // Two sections: Triage (a dashboard) and Topology (the maps). The view switcher belongs to Topology only.
+    const section = view === 'triage' ? 'triage' : 'topology';
+    document.querySelectorAll('#topbar .sections button').forEach((b) => b.classList.toggle('on', b.dataset.section === section));
+    $('#viewSeg').hidden = section === 'triage';
+    if (section === 'topology') document.querySelectorAll('#topbar .seg button').forEach((b) => b.classList.toggle('on', b.dataset.view === view));
+  }
+
+  // Root causes waiting in the Triage view, shown on its tab whatever view is open.
+  setTriageBadge({ count, level }) {
+    const el = $('#triageBadge');
+    el.hidden = !count;
+    el.textContent = count;
+    el.className = `badge ${level}`;
+    el.title = `${count} problem${count === 1 ? '' : 's'} to look at`;
   }
 
   setNamespaces(all, selected, platform) {
@@ -305,7 +327,9 @@ export class UI {
       const r = n.risk || {};
       html = `<div class="t1">${esc(n.name)}</div><div class="t2">${esc(n.subkind || n.kind)}${n.namespace ? ' · ' + esc(n.namespace) : ''}${n.ghost ? ' · outside filter' : ''}</div>`;
       if (n.kind === 'workload') html += `<div class="t2">${n.replicas.ready}/${n.replicas.desired} ready · ${n.pods.length} pods</div>`;
-      if (r.reasons && r.reasons.length) html += `<div class="t2" style="color:${LEVEL_COLOR[r.level]}">${esc(r.reasons[0].text)}</div>`;
+      const f = (this.graph.findings || []).find((x) => x.subject === n.id && x.severity !== 'info' && !x.effectOf);
+      if (f) html += `<div class="t2" style="color:${LEVEL_COLOR[f.severity]}">${esc(f.title)}</div>${f.fix ? `<div class="t3"><b>Next</b>${esc(f.fix)}</div>` : ''}`;
+      else if (r.reasons && r.reasons.length) html += `<div class="t2" style="color:${LEVEL_COLOR[r.level]}">${esc(r.reasons[0].text)}</div>`;
       else if (r.impactLevel && r.impactLevel !== 'ok') html += `<div class="t2" style="color:${LEVEL_COLOR[r.impactLevel]}">Slowed by a downstream dependency</div>`;
     }
     tip.innerHTML = html;
@@ -316,8 +340,9 @@ export class UI {
   }
 
   // ------------------------------------------------------------------ drawer
-  renderDrawer(sel) {
+  renderDrawer(sel, refresh = false) {
     const d = $('#drawer');
+    const scroll = refresh ? d.scrollTop : 0;
     if (!sel || !this.graph || sel.type === 'path') { d.hidden = true; return; }
     const byId = new Map(this.graph.nodes.map((n) => [n.id, n]));
     let html = '';
@@ -339,6 +364,11 @@ export class UI {
     html += this._blast(sel.type === 'edge' ? sel.id : sel.type === 'node' ? sel.id : null, byId);
     $('#drawerBody').innerHTML = html;
     d.hidden = false;
+    d.scrollTop = scroll;
+    d.querySelectorAll('[data-copy]').forEach((el) => el.addEventListener('click', () => {
+      this.ctx.copy(el.dataset.copy); el.textContent = 'copied'; setTimeout(() => { el.textContent = 'copy'; }, 1200);
+    }));
+    d.querySelectorAll('[data-logs]').forEach((el) => el.addEventListener('click', () => this._loadLogs(el)));
     d.querySelectorAll('[data-cascade]').forEach((el) => el.addEventListener('click', () => {
       this.ctx.onView('cascade');
       this.ctx.onSelect({ type: 'cascade', root: el.dataset.cascade }, true);
@@ -363,6 +393,84 @@ export class UI {
     return `<div class="d-sec"><h3>Blast radius · ${c.count} degraded dependent${c.count === 1 ? '' : 's'}${c.userFacing ? ' · reaches users' : ''}</h3>
       <div class="blast">${chips}</div>
       <div style="margin-top:8px"><a class="link" data-cascade="${esc(c.root)}" style="cursor:pointer;color:var(--cyan)">Show this cascade ▸</a></div></div>`;
+  }
+
+  // What diagnose.py found for this node or call: cause, next step, commands.
+  _diagnosis(id) {
+    const fs = (this.graph.findings || []).filter((f) => f.subject === id);
+    if (!fs.length) return '';
+    const real = fs.filter((f) => f.severity !== 'info').sort((x, y) => (x.effectOf ? 1 : 0) - (y.effectOf ? 1 : 0));
+    const info = fs.filter((f) => f.severity === 'info');
+    const card = (f) => `<div class="d-find ${f.severity}"><div class="cat">${esc(f.category)}${f.root ? '' : ` · symptom of ${esc(f.causedByName || '')}`}</div>
+      <div class="t">${esc(f.title)}</div>
+      ${f.cause ? `<p><b>Why</b>${esc(f.cause)}</p>` : ''}${f.detail ? `<p>${esc(f.detail)}</p>` : ''}
+      ${f.fix ? `<p class="fix"><b>Next</b>${esc(f.fix)}</p>` : ''}
+      ${f.evidence.map((e) => `<pre class="ev-msg">${esc(e)}</pre>`).join('')}
+      ${f.commands.map((c) => `<div class="cmd"><code>${esc(c)}</code><button class="link" data-copy="${esc(c)}">copy</button></div>`).join('')}</div>`;
+    return (real.length ? `<div class="d-sec"><h3>Diagnosis</h3>${real.map(card).join('')}</div>` : '')
+      + (info.length ? `<div class="d-sec"><h3>Worth knowing</h3>${info.map(card).join('')}</div>` : '');
+  }
+
+  _events(n) {
+    if (!n.events?.length) return '';
+    return `<div class="d-sec"><h3>Warning events · last hour</h3><ul class="d-events">${n.events.map((e) => `<li>
+      <span class="r">${esc(e.reason)}</span>${e.count > 1 ? ` ×${e.count}` : ''}<span class="a">${e.ageS != null ? fmtAge(e.ageS) + ' ago' : ''} · ${esc(e.kind)}/${esc(e.name)}</span>
+      <div class="m">${esc(e.message)}</div></li>`).join('')}</ul></div>`;
+  }
+
+  _rollout(n) {
+    const r = n.rollout;
+    if (!r) return '';
+    const color = { complete: 'var(--ok)', progressing: 'var(--warn)', paused: 'var(--warn)', stuck: 'var(--crit)', failed: 'var(--crit)' }[r.state];
+    return `<div class="d-sec"><h3>Latest rollout</h3><dl class="kv">
+      <dt>State</dt><dd style="color:${color};font-weight:600">${esc(r.state)}</dd>
+      ${r.revision ? `<dt>Revision</dt><dd>${r.revision}${r.ageSeconds != null ? ` · started ${fmtAge(r.ageSeconds)} ago` : ''}</dd>` : ''}
+      ${r.updated != null ? `<dt>New pods</dt><dd>${r.updatedReady ?? r.updated}/${r.desired} ${r.updatedReady != null ? 'ready' : 'updated'}${r.old ? ` · ${r.old} old still running` : ''}</dd>` : ''}
+      <dt>Strategy</dt><dd>${esc(r.strategy)}</dd>
+      ${r.changes.length ? `<dt>Changed</dt><dd>${r.changes.map(esc).join('<br>')}</dd>` : ''}
+      ${r.message ? `<dt>Message</dt><dd>${esc(r.message)}</dd>` : ''}</dl></div>`;
+  }
+
+  // One pod, container by container: what it is doing now and how it last died.
+  _podDetail(n, p) {
+    const ctrs = p.containerInfo || [];
+    const key = `${n.namespace}/${p.name}`;
+    const stColor = (c) => (c.state === 'running' && c.ready ? LEVEL_COLOR.ok : c.state === 'running' ? LEVEL_COLOR.warning
+      : c.state === 'terminated' && c.exitCode === 0 ? LEVEL_COLOR.evicted : LEVEL_COLOR.critical);
+    const canLog = this.meta?.podLogs;
+    return `<div class="d-sec"><h3>Pod ${esc(p.name)}</h3><dl class="kv">
+      <dt>Phase</dt><dd>${esc(p.phase)}${p.reason ? ' · ' + esc(p.reason) : ''} · ${p.ready ? 'ready' : `not ready${p.notReadyS != null ? ' for ' + fmtAge(p.notReadyS) : ''}`}</dd>
+      <dt>Node</dt><dd>${p.node ? esc(p.node) : '<span style="color:var(--crit)">not scheduled</span>'}${p.ip ? ' · ' + esc(p.ip) : ''}</dd>
+      <dt>QoS</dt><dd>${esc(p.qos || '–')}</dd>
+      ${p.message ? `<dt>Message</dt><dd>${esc(p.message)}</dd>` : ''}</dl>
+      <div style="margin-top:8px">${ctrs.map((c) => `<div class="d-ctr"><div class="h"><span class="st" style="background:${stColor(c)}"></span>
+        <b>${esc(c.name)}</b>${c.init ? '<span class="ev">init</span>' : ''}<span style="color:var(--muted)">${esc(c.state)}${c.reason ? ' · ' + esc(c.reason) : ''}</span>
+        <span style="margin-left:auto;color:var(--faint)">${c.restarts} restart${c.restarts === 1 ? '' : 's'}</span></div>
+        <div class="s mono">${esc(c.image)}</div>
+        ${c.message ? `<div class="s">${esc(c.message)}</div>` : ''}
+        ${c.last ? `<div class="s">Last exit: <b style="color:var(--text)">${esc(c.last.reason || 'exited')}${c.last.exitCode != null ? ` (code ${c.last.exitCode})` : ''}</b>${c.last.ageS != null ? ` · ${fmtAge(c.last.ageS)} ago` : ''}${c.last.message ? `<pre class="ev-msg">${esc(c.last.message)}</pre>` : ''}</div>` : ''}
+        ${canLog && c.state !== 'waiting' || (canLog && c.last) ? `<div>${c.state === 'running' || c.state === 'terminated' ? `<button class="btn small" data-logs="${esc(key)}|${esc(c.name)}|0">Last log lines</button> ` : ''}
+          ${c.last ? `<button class="btn small" data-logs="${esc(key)}|${esc(c.name)}|1">Log before the last restart</button>` : ''}</div>` : ''}
+        <pre class="ev-msg" data-logout="${esc(key)}|${esc(c.name)}" ${this._logCache?.key === `${key}|${c.name}` ? '' : 'hidden'}>${this._logCache?.key === `${key}|${c.name}` ? esc(this._logCache.text) : ''}</pre>
+        </div>`).join('') || '<div class="empty">No container status reported yet.</div>'}</div>
+      ${!canLog && ctrs.length ? '<div class="d-sub">Log tails are switched off on this collector (GALAXY_POD_LOGS).</div>' : ''}</div>`;
+  }
+
+  async _loadLogs(btn) {
+    const [key, container, prev] = btn.dataset.logs.split('|');
+    const [ns, pod] = key.split('/');
+    const out = btn.closest('.d-ctr').querySelector('[data-logout]');
+    out.hidden = false;
+    out.textContent = 'Loading…';
+    try {
+      const res = await this.ctx.fetchLogs(ns, pod, container, prev === '1');
+      const text = (res.lines || []).join('\n') || '(no log output)';
+      this._logCache = { key: `${key}|${container}`, text };
+      out.textContent = text;
+      out.scrollTop = out.scrollHeight;
+    } catch (err) {
+      out.textContent = `Could not read the log: ${err.message}`;
+    }
   }
 
   _risk(r) {
@@ -408,6 +516,11 @@ export class UI {
     let html = `<div class="d-kind">${esc(kind)}</div><div class="d-title">${esc(n.name)}</div>
       <div class="d-sub">${n.namespace ? esc(n.namespace) : ''}${n.ghost ? ' · outside current filter' : ''}</div>`;
     html += this._risk(n.risk);
+    if (n.kind === 'workload' && podName) {      // the pod that was clicked comes first
+      const pod = n.pods.find((p) => p.name === podName);
+      if (pod) html += this._podDetail(n, pod);
+    }
+    html += this._diagnosis(n.id);
     if (n.kind === 'workload') {
       const u = n.usage || {};
       html += `<div class="d-sec"><h3>Status</h3><dl class="kv">
@@ -418,6 +531,12 @@ export class UI {
         <dt>Hosts</dt><dd>${n.hosts.map((h) => `<a data-node="host:${esc(h)}" style="cursor:pointer;color:var(--cyan)">${esc(h)}</a>`).join(', ') || '–'}</dd>
         ${n.schedule ? `<dt>Schedule</dt><dd class="mono">${esc(n.schedule)}</dd>` : ''}
       </dl></div>`;
+      html += this._rollout(n);
+      if (n.storage?.length) {
+        html += `<div class="d-sec"><h3>Storage</h3><dl class="kv">${n.storage.map((s) => `<dt>${esc(s.claim)}</dt>
+          <dd><span style="color:${s.phase === 'Bound' ? 'var(--ok)' : 'var(--crit)'}">${esc(s.phase)}</span> · ${esc(s.size || '?')} · ${esc(s.storageClass || 'no class')}${s.accessModes.length ? ' · ' + esc(s.accessModes.join(',')) : ''}</dd>`).join('')}</dl></div>`;
+      }
+      html += this._events(n);
       if (n.services.length) {
         html += `<div class="d-sec"><h3>Services</h3><dl class="kv">${n.services.map((s) => `<dt>${esc(s.name)}</dt>
           <dd>${esc(s.type)} ${esc(s.ports.join(', '))}${s.lbIPs.length ? ' @ ' + esc(s.lbIPs.join(', ')) : ''}
@@ -427,6 +546,21 @@ export class UI {
     if (n.kind === 'entry') {
       html += `<div class="d-sec"><h3>Hosts</h3><div class="mono">${n.hosts.map(esc).join('<br>') || '*'}</div>
         <div class="d-sub" style="margin-top:4px">${n.tls ? 'TLS terminated at the edge' : 'Plain HTTP'}</div></div>`;
+    }
+    if (n.kind === 'external') {
+      const where = { lan: ['Your network (LAN)', 'Outside the cluster, inside your own network', '#5ee6a8'],
+        internet: ['Internet', 'A public address outside your network', '#ffd75e'],
+        cluster: ['Cluster infrastructure', 'Part of the cluster itself (API server / node)', '#9fdcff'] }[n.scope || 'internet'];
+      html += `<div class="d-sec"><h3>Where it lives</h3><div style="color:${where[2]};font-weight:650">${where[0]}</div>
+        <div class="d-sub">${where[1]}${n.scopeWhy ? ` · ${esc(n.scopeWhy)}` : ''}</div></div>`;
+    }
+    if (n.kind === 'clients') {
+      const lan = n.scope === 'lan';
+      html += `<div class="d-sec"><h3>Where they come from</h3>
+        <div style="color:${lan ? '#5ee6a8' : '#ffd75e'};font-weight:650">${lan ? 'Your network (LAN)' : 'The internet'}</div>
+        <div class="d-sub">${esc(n.scopeWhy || '')}</div>
+        ${n.seenFrom?.length ? `<div class="mono" style="margin-top:6px">${n.seenFrom.map(esc).join('<br>')}</div>
+        <div class="d-sub">recently seen source addresses</div>` : ''}</div>`;
     }
     if (n.kind === 'external' && n.addresses?.length) {
       html += `<div class="d-sec"><h3>Addresses</h3><div class="mono">${n.addresses.slice(0, 12).map(esc).join('<br>')}</div></div>`;
@@ -465,6 +599,7 @@ export class UI {
         <dt>Slower than peers</dt><dd>${net.slowConnections}</dd>
         <dt>RTT p50 / p95</dt><dd>${fmtMs(net.rttP50Ms)} / ${fmtMs(net.rttP95Ms)} · cluster p50 ${fmtMs(net.clusterRttP50Ms)}</dd></dl></div>`
         : n.agentStale ? '<div class="d-sec"><h3>Network</h3><div class="empty">No agent report from this node.</div></div>' : ''}`;
+      html += this._events(n);
       const wls = this.graph.nodes.filter((w) => w.kind === 'workload' && w.hosts.includes(n.name));
       html += `<div class="d-sec"><h3>Workloads here</h3><ul class="peers">${wls.map((w) => `<li data-node="${esc(w.id)}"><div class="p1">
         <span class="st" style="background:${LEVEL_COLOR[w.risk.level]}"></span><span class="nm">${esc(w.name)}</span>
@@ -474,7 +609,7 @@ export class UI {
     if (n.kind !== 'clients') html += `<div class="d-sec"><h3>Upstream · who calls it (${inbound.length})</h3>${this._peers(inbound, byId, 'up')}</div>`;
     html += `<div class="d-sec"><h3>Downstream · what it calls (${outbound.length})</h3>${this._peers(outbound, byId, 'down')}</div>`;
     if (n.kind === 'workload' && n.pods.length) {
-      html += `<div class="d-sec"><h3>Pods (${n.pods.length})</h3><table class="pods"><tr><th>Pod</th><th>Node</th><th>CPU</th><th>Mem</th><th>↻</th><th>Age</th></tr>
+      html += `<div class="d-sec"><h3>Pods (${n.pods.length}) <span style="text-transform:none;letter-spacing:0;font-weight:450;color:var(--faint)">· click one for its containers</span></h3><table class="pods"><tr><th>Pod</th><th>Node</th><th>CPU</th><th>Mem</th><th>↻</th><th>Age</th></tr>
         ${n.pods.map((p) => {
           const lvl = podLevel(p);
           return `<tr data-pod="${esc(n.id)}#${esc(p.name)}" ${p.name === podName ? 'style="background:rgba(79,209,255,0.08)"' : ''}>
@@ -494,6 +629,7 @@ export class UI {
     let html = `<div class="d-kind">${typeLabel}</div><div class="d-title">${esc(s?.name)} → ${esc(t?.name)}</div>
       <div class="d-sub">${e.evidence.map((x) => `<span class="ev ${x}">${x}</span>`).join(' ')}</div>`;
     html += this._risk(e.risk);
+    html += this._diagnosis(e.id);
     html += `<div class="d-sec"><h3>Traffic & latency</h3><dl class="kv">
       ${T.rps != null ? `<dt>Requests</dt><dd>${fmtNum(T.rps)}/s</dd>` : ''}
       ${T.connections != null ? `<dt>Connections</dt><dd>${T.connections}</dd>` : ''}

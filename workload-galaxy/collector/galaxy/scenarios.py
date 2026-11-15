@@ -62,6 +62,7 @@ class World:
         self.slow_nodes: dict[str, float] = {}     # node -> request latency multiplier (contention)
         self.mesh_err: dict[str, float] = {}       # "ns/name" callee -> extra 5xx rate
         self.mesh_slow: dict[str, float] = {}      # "ns/name" callee -> latency multiplier
+        self.blocked: set[tuple[str, str]] = set()  # (caller or "*", callee): connections never get through
         self.guides: dict[str, dict] = {}
         self._ip = 180
 
@@ -153,7 +154,7 @@ class World:
                 waiting: str | None = None, message: str = "", age: float = 60, suffix: str | None = None,
                 owner: dict | None = None, image: str | None = None, container: dict | None = None,
                 usage: tuple[float, float] | None = None, restarts: int = 0,
-                last_terminated: str | None = None) -> dict:
+                last_terminated: str | None = None, exit_code: int | None = None) -> dict:
         ns, app = key.split("/")
         base = self.pods_of(key)[0] if self.pods_of(key) else None
         cont = copy.deepcopy(container or base["spec"]["containers"][0])
@@ -161,12 +162,15 @@ class World:
             cont["image"] = image
         owner = owner or (base["metadata"]["ownerReferences"][0] if base else None)
         name = f"{owner['name'] if owner and owner['kind'] != 'StatefulSet' else app}-{suffix or _h(key + str(len(self.objs['pods'])))}"
-        status: dict = {"phase": phase, "conditions": [{"type": "Ready", "status": "True" if ready else "False"}],
+        term = {"reason": last_terminated, "finishedAt": _iso(90)}
+        if exit_code is not None:
+            term["exitCode"] = exit_code
+        status: dict = {"phase": phase, "conditions": [{"type": "Ready", "status": "True" if ready else "False",
+                                                        "lastTransitionTime": _iso(age)}],
                         "containerStatuses": [{
                             "name": app, "restartCount": restarts,
                             "state": {"waiting": {"reason": waiting, "message": message}} if waiting else {"running": {}},
-                            "lastState": {"terminated": {"reason": last_terminated, "finishedAt": _iso(90)}}
-                            if last_terminated else {}}]}
+                            "lastState": {"terminated": term} if last_terminated else {}}]}
         if node and phase == "Running":
             ip = self._next_ip(node)
             status.update(podIP=ip, podIPs=[{"ip": ip}])
@@ -209,6 +213,38 @@ class World:
         obj["_owner"] = owner
         obj["_container"] = container
         return obj
+
+    def event(self, kind: str, ns: str, name: str, reason: str, message: str, *, age: float = 60, count: int = 1) -> None:
+        self.objs["events"].append({"type": "Warning", "reason": reason, "message": message, "count": count,
+                                    "lastTimestamp": _iso(age),
+                                    "involvedObject": {"kind": kind, "namespace": ns, "name": name}})
+
+    def rollout(self, key: str, *, age: float, image: str | None = None, mutate=None, pods: int = 1,
+                **pod_kw) -> tuple[dict, list[dict]]:
+        """Start a new revision of a Deployment: a new ReplicaSet with the changed template, plus `pods` new pods."""
+        ns, name = key.split("/")
+        dep = self.controller(key)[1]
+        owned = [r for r in self.objs["replicasets"] if r["metadata"]["namespace"] == ns
+                 and r["metadata"]["ownerReferences"][0]["name"] == name]
+        cur = max(int((r["metadata"].get("annotations") or {}).get("deployment.kubernetes.io/revision") or 1)
+                  for r in owned)
+        tmpl = copy.deepcopy(dep["spec"]["template"])
+        if image:
+            tmpl["spec"]["containers"][0]["image"] = image
+        if mutate:
+            mutate(tmpl["spec"]["containers"][0])
+        dep["spec"]["template"] = tmpl
+        rs_name = f"{name}-{_h(key + str(cur + 1), 9)}"
+        self.objs["replicasets"].append({
+            "metadata": {"name": rs_name, "namespace": ns, "creationTimestamp": _iso(age),
+                         "annotations": {"deployment.kubernetes.io/revision": str(cur + 1)},
+                         "ownerReferences": [{"kind": "Deployment", "name": name, "controller": True}]},
+            "spec": {"replicas": pods, "template": tmpl}})
+        owner = {"kind": "ReplicaSet", "name": rs_name, "controller": True}
+        node = self.pods_of(key)[0]["spec"]["nodeName"]
+        new = [self.add_pod(key, node=pod_kw.pop("node", node), owner=owner, container=tmpl["spec"]["containers"][0],
+                            age=max(5, age - 8), **pod_kw) for _ in range(pods)]
+        return owner, new
 
     def scale(self, key: str, replicas: int) -> None:
         found = self.controller(key)
@@ -418,15 +454,12 @@ def oom_loop(w: World) -> dict:
 
 def bad_rollout(w: World) -> dict:
     key = "storefront/cart"
-    old = w.pods_of(key)[0]
-    rs_name = f"cart-{_h('cart-rc1', 9)}"
-    w.objs["replicasets"].append({"metadata": {"name": rs_name, "namespace": "storefront",
-                                               "ownerReferences": [{"kind": "Deployment", "name": "cart",
-                                                                    "controller": True}]},
-                                  "spec": {"replicas": 1}})
-    w.add_pod(key, node=old["spec"]["nodeName"], phase="Pending", ready=False, waiting="ImagePullBackOff",
-              message='Back-off pulling image "quay.io/acme/cart:1.6.0-rc1"', image="quay.io/acme/cart:1.6.0-rc1",
-              owner={"kind": "ReplicaSet", "name": rs_name, "controller": True}, age=420)
+    image = "quay.io/acme/cart:1.6.0-rc1"
+    _owner, new = w.rollout(key, age=420, image=image, phase="Pending", ready=False, waiting="ImagePullBackOff",
+                            message=f'Back-off pulling image "{image}"')
+    w.event("Pod", "storefront", new[0]["metadata"]["name"], "Failed", count=6, age=40,
+            message=f'Failed to pull image "{image}": rpc error: code = NotFound desc = failed to pull and unpack '
+                    f'image "{image}": failed to resolve reference "{image}": manifest unknown')
     return {
         "focus": "wl:storefront/Deployment/cart",
         "layers": {
@@ -436,12 +469,14 @@ def bad_rollout(w: World) -> dict:
                         "replicas are ready, so traffic is unaffected.",
             "users": "No impact, unless someone scales the old ReplicaSet down.",
         },
+        "triage": "Rollout stuck (what changed: the image tag) and, as its cause, 'can't pull cart:1.6.0-rc1: the "
+                  "image or tag does not exist'.",
     }
 
 
 def db_outage(w: World) -> dict:
     key = "data/orders-db"
-    for p in w.pods_of(key):
+    for p in (x for x in w.pods_of(key) if x["status"].get("containerStatuses")):
         cs = p["status"]["containerStatuses"][0]
         cs["restartCount"] = 9
         cs["state"] = {"waiting": {"reason": "CrashLoopBackOff", "message": "back-off 5m0s restarting failed container"}}
@@ -492,6 +527,252 @@ def disk_pressure(w: World) -> dict:
     }
 
 
+# --------------------------------------------------------------------------- deployment failures
+def _guide(focus: str, triage: str, services: str, pods: str = "", users: str = "", hosts: str = "Unaffected.") -> dict:
+    return {"focus": focus, "triage": triage,
+            "layers": {"hosts": hosts, "pods": pods, "services": services, "users": users}}
+
+
+def missing_config(w: World) -> dict:
+    key = "storefront/recommendations"
+    w.objs["configmaps"].append({"metadata": {"name": "recommendation-settings", "namespace": "storefront"},
+                                 "data": {"MODEL": "v4"}})
+
+    def change(c: dict) -> None:
+        c["envFrom"] = [{"configMapRef": {"name": "recommendations-settings"}}]
+    w.rollout(key, age=300, image="quay.io/acme/recommendations:1.16.0", mutate=change, phase="Pending", ready=False,
+              waiting="CreateContainerConfigError", message='configmap "recommendations-settings" not found')
+    return _guide("wl:storefront/Deployment/recommendations",
+                  "Rollout stuck, caused by: ConfigMap recommendations-settings is missing - with the hint that a "
+                  "ConfigMap named recommendation-settings exists (a typo).",
+                  "recommendations: rollout stuck, old pods still serving.", "The new pod is red: CreateContainerConfigError.",
+                  "No impact while the old pods run.")
+
+
+def crash_on_start(w: World) -> dict:
+    key = "identity/user-profile"
+    for p in (x for x in w.pods_of(key) if x["status"].get("containerStatuses")):
+        cs = p["status"]["containerStatuses"][0]
+        cs["restartCount"] = 9
+        cs["state"] = {"waiting": {"reason": "CrashLoopBackOff", "message": "back-off 5m0s restarting failed container"}}
+        cs["lastState"] = {"terminated": {"reason": "Error", "exitCode": 127, "finishedAt": _iso(110),
+                                          "message": "exec: \"/app/start-server.sh\": stat /app/start-server.sh: "
+                                                     "no such file or directory"}}
+        w.set_ready(p, False)
+        w.usage.pop(f"{p['metadata']['namespace']}/{p['metadata']['name']}", None)
+        w.event("Pod", "identity", p["metadata"]["name"], "BackOff", "Back-off restarting failed container user-profile",
+                age=30, count=41)
+    return _guide("wl:identity/Deployment/user-profile",
+                  "2 pods crash-looping: command not found (exit 127), with the container's own last message. auth "
+                  "→ user-profile failures are listed under it as symptoms.",
+                  "user-profile is down (0/2); auth, which calls it, degrades.", "Both user-profile pods are red.",
+                  "Logins that need the profile fail.")
+
+
+def quota_exceeded(w: World) -> dict:
+    key = "payments/payments-api"
+    w.scale(key, 4)
+    q = w.objs["resourcequotas"][0]
+    q["status"]["used"] = {"limits.memory": "7936Mi", "limits.cpu": "6500m", "pods": "6"}
+    dep = w.controller(key)[1]
+    msg = ('pods "payments-api-7c9d8-" is forbidden: exceeded quota: compute, requested: limits.memory=512Mi, '
+           'used: limits.memory=7936Mi, limited: limits.memory=8Gi')
+    dep["status"] = {"conditions": [{"type": "ReplicaFailure", "status": "True", "reason": "FailedCreate", "message": msg}]}
+    rs = next(r for r in w.objs["replicasets"] if r["metadata"]["ownerReferences"][0]["name"] == "payments-api")
+    w.event("ReplicaSet", "payments", rs["metadata"]["name"], "FailedCreate", "Error creating: " + msg, age=20, count=14)
+    return _guide("wl:payments/Deployment/payments-api",
+                  "Quota: 'Can't create pods: the project quota is exhausted', with the API server's message "
+                  "(requested / used / limit) and the quota itself at 97%.",
+                  "payments-api shows 2/4 ready: the scale-up never produced pods.",
+                  "No new pods appear at all - nothing to see on the pods plane, which is why this one is hard to spot.",
+                  "Payments run at half the intended capacity.")
+
+
+def scc_denied(w: World) -> dict:
+    key = "data/order-worker"
+
+    def change(c: dict) -> None:
+        c["securityContext"] = {"runAsUser": 0}
+    w.rollout(key, age=900, image="quay.io/acme/order-worker:1.13.0", mutate=change, pods=0)
+    rs = w.objs["replicasets"][-1]
+    msg = ('pods "order-worker-" is forbidden: unable to validate against any security context constraint: '
+           '[provider "anyuid": Forbidden: not usable by user or serviceaccount, provider restricted-v2: '
+           '.containers[0].runAsUser: Invalid value: 0: must be in the ranges: [1000680000, 1000689999]]')
+    w.event("ReplicaSet", "data", rs["metadata"]["name"], "FailedCreate", "Error creating: " + msg, age=25, count=22)
+    return _guide("wl:data/Deployment/order-worker",
+                  "Admission: 'Can't create pods: the pod is rejected by the security policy' (SCC), plus the stuck "
+                  "rollout and what changed in it.",
+                  "order-worker: rollout stuck at 0 new pods; the old version keeps running.",
+                  "No new pod exists, so the pods plane looks healthy.", "No impact yet.")
+
+
+def pvc_pending(w: World) -> dict:
+    key = "data/search-index"
+    w.scale(key, 4)
+    claim = "data-search-index-3"
+    w.objs["persistentvolumeclaims"].append({
+        "metadata": {"name": claim, "namespace": "data", "creationTimestamp": _iso(780)},
+        "spec": {"storageClassName": "fast-ssd", "accessModes": ["ReadWriteOnce"],
+                 "resources": {"requests": {"storage": "50Gi"}}}, "status": {"phase": "Pending"}})
+    w.event("PersistentVolumeClaim", "data", claim, "ProvisioningFailed",
+            'storageclass.storage.k8s.io "fast-ssd" not found', age=35, count=52)
+    msg = "0/3 nodes are available: pod has unbound immediate PersistentVolumeClaims. preemption: 0/3 nodes are available"
+    pod = w.add_pod(key, node=None, phase="Pending", ready=False, message=msg, age=780, suffix="3",
+                    owner={"kind": "StatefulSet", "name": "search-index", "controller": True})
+    pod["spec"]["volumes"] = [{"name": "data", "persistentVolumeClaim": {"claimName": claim}}]
+    return _guide("wl:data/StatefulSet/search-index",
+                  "Storage: 'Volume claim data-search-index-3 is not bound', cause 'StorageClass \"fast-ssd\" does not "
+                  "exist'. The unschedulable pod is explained by it.",
+                  "search-index shows 3/4 ready.", "search-index-3 hangs off the Unscheduled queue.",
+                  "None: three replicas still serve.", "The Unscheduled queue holds one pod.")
+
+
+def probe_failing(w: World) -> dict:
+    key = "identity/auth"
+
+    def change(c: dict) -> None:
+        c["readinessProbe"] = {"httpGet": {"path": "/healthz/ready", "port": 8080}, "periodSeconds": 5}
+    _owner, new = w.rollout(key, age=840, image="quay.io/acme/auth:1.5.0", mutate=change, ready=False,
+                            usage=(0.08, 140))
+    w.event("Pod", "identity", new[0]["metadata"]["name"], "Unhealthy",
+            "Readiness probe failed: HTTP probe failed with statuscode: 404", age=4, count=160)
+    dep = w.controller(key)[1]
+    dep["status"] = {"conditions": [{"type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded",
+                                     "message": 'ReplicaSet "auth" has timed out progressing.'}]}
+    return _guide("wl:identity/Deployment/auth",
+                  "Rollout failed (ProgressDeadlineExceeded) with what changed (image, readiness probe), and Probes: "
+                  "'running but failing the readiness probe: the probe path doesn't exist in the app (HTTP 404)'.",
+                  "auth: rollout failed; 2/2 old pods serve.", "The new auth pod is amber: Running, never Ready.",
+                  "No impact: unready pods get no traffic.")
+
+
+def liveness_kill(w: World) -> dict:
+    key = "storefront/web-frontend"
+    for i, p in enumerate(x for x in w.pods_of(key) if x["status"].get("containerStatuses")):
+        cs = p["status"]["containerStatuses"][0]
+        cs["restartCount"] = 6 + i
+        cs["lastState"] = {"terminated": {"reason": "Error", "exitCode": 137, "finishedAt": _iso(50 + 70 * i)}}
+        w.event("Pod", "storefront", p["metadata"]["name"], "Unhealthy", age=20 + 30 * i, count=30,
+                message="Liveness probe failed: Get \"http://10.128.2.14:8080/live\": context deadline exceeded "
+                        "(Client.Timeout exceeded while awaiting headers)")
+    w.mesh_err[key] = 0.08
+    w.mesh_slow[key] = 2.5
+    return _guide("wl:storefront/Deployment/web-frontend",
+                  "Probes: '3 pods restarted by a failing liveness probe' - the app doesn't answer within the probe "
+                  "timeout, so the kubelet keeps killing it. Without the events this looks like a plain crash (exit 137).",
+                  "web-frontend restarts repeatedly; requests in flight fail.", "Its pods show recent restarts.",
+                  "Intermittent errors on the shop.")
+
+
+def port_mismatch(w: World) -> dict:
+    key = "storefront/catalog"
+    svc = next(x for x in w.objs["services"] if x["metadata"]["name"] == "catalog")
+    svc["spec"]["ports"][0]["targetPort"] = 8081
+    w.blocked.add(("*", key))
+    return _guide("wl:storefront/Deployment/catalog",
+                  "Network: 'Service catalog sends traffic to port 8081, but the pods don't listen there' (they "
+                  "listen on 8080, seen by the node agent). Every caller's failure is a symptom of it.",
+                  "catalog's pods are all green, yet every call to it fails.", "All catalog pods are Ready.",
+                  "The shop can't show products.")
+
+
+def netpol_block(w: World) -> dict:
+    w.objs["networkpolicies"].append({
+        "metadata": {"name": "allow-from-data-tier", "namespace": "data"},
+        "spec": {"podSelector": {"matchLabels": {"app": "orders-db"}}, "policyTypes": ["Ingress"],
+                 "ingress": [{"from": [{"namespaceSelector": {"matchLabels": {"tier": "data"}}}],
+                              "ports": [{"protocol": "TCP", "port": 5432}]}]}})
+    for src in ("storefront/catalog", "payments/ledger", "identity/user-profile"):
+        w.blocked.add((src, "data/orders-db"))
+    return _guide("wl:data/StatefulSet/orders-db",
+                  "Network: 'NetworkPolicy blocks catalog → orders-db' (and ledger, user-profile): policy "
+                  "allow-from-data-tier only admits namespaces labelled tier=data. order-worker, in the data "
+                  "namespace, still gets through.",
+                  "orders-db itself is healthy; three callers from other projects can't connect.",
+                  "Pods are all Ready on both sides.", "Catalog, payments and profile requests time out.")
+
+
+def route_broken(w: World) -> dict:
+    w.objs["routes"].append({"metadata": {"name": "checkout", "namespace": "storefront", "creationTimestamp": _iso(600)},
+                             "spec": {"host": "checkout.acme.example", "to": {"kind": "Service", "name": "cart-svc"},
+                                      "tls": {"termination": "edge"}},
+                             "status": {"ingress": [{"host": "checkout.acme.example", "conditions": [
+                                 {"type": "Admitted", "status": "True"}]}]}})
+    w.objs["routes"].append({"metadata": {"name": "promo", "namespace": "storefront", "creationTimestamp": _iso(600)},
+                             "spec": {"host": "shop.acme.example", "path": "/promo",
+                                      "to": {"kind": "Service", "name": "web-frontend"}},
+                             "status": {"ingress": [{"host": "shop.acme.example", "conditions": [
+                                 {"type": "Admitted", "status": "False", "reason": "HostAlreadyClaimed",
+                                  "message": "route shop already exposes shop.acme.example and is older"}]}]}})
+    return _guide("entry:storefront/Route/checkout",
+                  "Network: 'Route checkout points at Service cart-svc, which doesn't exist' (with the hint that "
+                  "'cart' does) and 'Route promo is not admitted: HostAlreadyClaimed'.",
+                  "Two new routes are red; everything behind them is healthy.", "Unaffected.",
+                  "checkout.acme.example returns 503.")
+
+
+def failed_job(w: World) -> dict:
+    owner = {"kind": "CronJob", "name": "nightly-export", "controller": True}
+    w.objs["cronjobs"].append({"metadata": {"name": "nightly-export", "namespace": "data"},
+                               "spec": {"schedule": "0 2 * * *", "jobTemplate": {"spec": {"template": {"spec": {
+                                   "containers": [{"name": "export", "image": "quay.io/acme/export:2.1.0",
+                                                   "resources": {"requests": {"cpu": "100m", "memory": "128Mi"},
+                                                                 "limits": {"memory": "256Mi"}}}]}}}}},
+                               "status": {"lastScheduleTime": _iso(5400)}})
+    w.objs["jobs"].append({"metadata": {"name": "nightly-export-29384221", "namespace": "data", "ownerReferences": [owner],
+                                        "creationTimestamp": _iso(5400)},
+                           "spec": {"backoffLimit": 3},
+                           "status": {"failed": 4, "conditions": [{
+                               "type": "Failed", "status": "True", "reason": "BackoffLimitExceeded",
+                               "message": "Job has reached the specified backoff limit",
+                               "lastTransitionTime": _iso(4900)}]}})
+    return _guide("wl:data/CronJob/nightly-export",
+                  "Jobs: 'CronJob nightly-export: last run failed (BackoffLimitExceeded)'. Failed batch pods are "
+                  "history, so the maps don't show them; the Triage view does.",
+                  "nightly-export appears as an idle CronJob.", "No pods (the failed ones are finished).", "None.")
+
+
+def operator_degraded(w: World) -> dict:
+    for co in w.objs["clusteroperators"]:
+        if co["metadata"]["name"] == "ingress":
+            co["status"]["conditions"] = [
+                {"type": "Available", "status": "True"}, {"type": "Progressing", "status": "True"},
+                {"type": "Degraded", "status": "True", "reason": "IngressDegraded",
+                 "message": "The \"default\" ingress controller reports Degraded=True: DeploymentReplicasNotAvailable: "
+                            "1/2 of replicas are available"}]
+    mcp = w.objs["machineconfigpools"][0]
+    mcp["status"].update(updatedMachineCount=1, conditions=[{"type": "Updating", "status": "True"},
+                                                            {"type": "Degraded", "status": "False"}])
+    w.node("ocp-worker-2")["spec"]["unschedulable"] = True
+    for router in w.pods_of("openshift-ingress/router-default")[-1:]:
+        w.set_ready(router, False)
+    return _guide("host:ocp-worker-2",
+                  "Platform strip turns amber: ingress operator degraded, worker pool updating (1/3), one node "
+                  "cordoned. These show whatever project filter is set, because they explain symptoms inside projects.",
+                  "router-default runs at 1/2.", "One router pod is unready.", "Ingress capacity is halved.",
+                  "ocp-worker-2 is cordoned for the update.")
+
+
+# Curated combinations for showing what the board can do: each tells one kind of story.
+PRESETS = [
+    {"id": "deploy-failures", "title": "A bad release day",
+     "summary": "Six deployments fail six different ways: bad image tag, missing ConfigMap, crash on start, "
+                "exhausted quota, security policy, failing readiness probe.",
+     "scenarios": ["bad-rollout", "missing-config", "crash-on-start", "quota-exceeded", "scc-denied", "probe-failing"]},
+    {"id": "network", "title": "Wiring and network faults",
+     "summary": "Pods are green but calls fail: wrong Service port, a NetworkPolicy cutting callers off, broken "
+                "routes, packet loss on one node.",
+     "scenarios": ["port-mismatch", "netpol-block", "route-broken", "node-network"]},
+    {"id": "infrastructure", "title": "Infrastructure trouble",
+     "summary": "A node goes NotReady, another runs out of memory, pods can't be scheduled, a volume won't "
+                "provision, and the platform is mid-update.",
+     "scenarios": ["node-not-ready", "memory-pressure", "unschedulable", "pvc-pending", "operator-degraded"]},
+    {"id": "cascade", "title": "One root cause, many victims",
+     "summary": "The orders database goes down and takes its callers, and their callers, with it.",
+     "scenarios": ["db-outage", "liveness-kill", "failed-job"]},
+]
+
+
 @dataclass(frozen=True)
 class Scenario:
     id: str
@@ -526,4 +807,31 @@ SCENARIOS: dict[str, Scenario] = {s.id: s for s in [
              "cart's new version can't pull its image; old pods keep serving.", ("pods",), bad_rollout),
     Scenario("db-outage", "Database outage cascade",
              "orders-db crash-loops; every caller and their callers degrade.", ("services", "users"), db_outage),
+    Scenario("missing-config", "Deploy fails: missing ConfigMap",
+             "recommendations' new version references a ConfigMap whose name has a typo.", ("pods",), missing_config),
+    Scenario("crash-on-start", "Deploy fails: crash on start",
+             "user-profile exits with code 127 (command not found) and crash-loops.", ("pods", "services"), crash_on_start),
+    Scenario("quota-exceeded", "Deploy fails: project quota",
+             "payments-api can't scale: the project's memory quota is exhausted.", ("services",), quota_exceeded),
+    Scenario("scc-denied", "Deploy fails: security policy (SCC)",
+             "order-worker's new version asks to run as root; no SCC admits it.", ("services",), scc_denied),
+    Scenario("pvc-pending", "Deploy fails: volume not provisioned",
+             "search-index scales up, but its claim names a StorageClass that doesn't exist.", ("pods", "hosts"), pvc_pending),
+    Scenario("probe-failing", "Deploy fails: readiness probe",
+             "auth's new version probes a path that returns 404; the rollout times out.", ("pods",), probe_failing),
+    Scenario("liveness-kill", "Liveness probe kills the app",
+             "web-frontend is too slow to answer its liveness probe and is restarted over and over.", ("pods", "services"),
+             liveness_kill),
+    Scenario("port-mismatch", "Service points at the wrong port",
+             "catalog's Service targets 8081; the pods listen on 8080. Pods green, every call fails.", ("services",),
+             port_mismatch),
+    Scenario("netpol-block", "NetworkPolicy blocks callers",
+             "A new policy on orders-db only admits the data tier; three callers are cut off.", ("services",), netpol_block),
+    Scenario("route-broken", "Route misconfigured",
+             "One route points at a Service that doesn't exist; another claims a hostname already in use.", ("users",),
+             route_broken),
+    Scenario("failed-job", "CronJob run failed",
+             "nightly-export hit its backoff limit last night.", ("services",), failed_job),
+    Scenario("operator-degraded", "Platform: operator degraded + node update",
+             "The ingress operator is degraded while the worker pool is being updated.", ("hosts",), operator_degraded),
 ]}

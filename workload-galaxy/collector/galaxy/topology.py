@@ -27,11 +27,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import inference
+from .diagnose import Diagnoser
 from .flows import FlowStats, Observations, aggregate
 from .probes import ProbeResult
 from .prom import MeshEdge
 from .risk import score_graph
-from .util import (controller_ref, ip_is_local, iso_now, labels_of, meta, name_of, normalize_ip, now_utc,
+from .util import (controller_ref, ip_is_local, is_ip, iso_now, labels_of, meta, name_of, normalize_ip, now_utc,
                    ns_of, parse_cpu, parse_mem, parse_ts, percentile)
 
 PLATFORM_NS = re.compile(
@@ -42,6 +43,12 @@ PLATFORM_NS = re.compile(
 INGRESS_CONTROLLER = re.compile(r"traefik|ingress|nginx|haproxy|envoy|contour|kong|router|gateway|istio-ingress", re.I)
 K3S_SVCLB_LABEL = "svccontroller.k3s.cattle.io/svcname"
 UNSCHEDULED = "host:(unscheduled)"
+# Your own network: RFC 1918, shared address space (CGNAT), link-local, loopback, IPv6 ULA/link-local.
+# Extend with GALAXY_INTERNAL_CIDRS. (Documentation ranges count as public, so demo data looks real.)
+INTERNAL_NETS = [ipaddress.ip_network(c) for c in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16", "127.0.0.0/8",
+    "fc00::/7", "fe80::/10", "::1/128")]
+INTERNAL_SUFFIX = re.compile(r"\.(local|lan|internal|intranet|corp|home\.arpa|localdomain|private)$")
 MAX_EXTERNAL_NODES = 25
 MAX_DETAILS = 8
 
@@ -93,13 +100,33 @@ def _short_image(image: str) -> str:
     return image.rsplit("/", 1)[-1]
 
 
+def _container_info(cs: dict, image: str, init: bool, now) -> dict:
+    """One container's state, as a troubleshooter needs it: what it is doing and how it last died."""
+    state = cs.get("state") or {}
+    kind = next((k for k in ("running", "waiting", "terminated") if state.get(k) is not None), "unknown")
+    cur = state.get(kind) or {}
+    last = (cs.get("lastState") or {}).get("terminated") or (cur if kind == "terminated" else None)
+    out = {"name": cs.get("name", ""), "image": image, "init": init, "state": kind,
+           "reason": cur.get("reason", ""), "message": (cur.get("message") or "")[:400],
+           "ready": bool(cs.get("ready")), "restarts": int(cs.get("restartCount") or 0), "last": None}
+    if kind == "terminated":
+        out["exitCode"] = cur.get("exitCode")
+    if last:
+        finished = parse_ts(last.get("finishedAt"))
+        out["last"] = {"reason": last.get("reason", ""), "exitCode": last.get("exitCode"), "signal": last.get("signal"),
+                       "message": (last.get("message") or "")[:400],
+                       "ageS": int((now - finished).total_seconds()) if finished else None}
+    return out
+
+
 # --------------------------------------------------------------------------- builder
 class Builder:
     def __init__(self, snap: dict, *, reports: list[dict] | None = None,
                  mesh: dict[tuple[str, str, str, str], MeshEdge] | None = None,
                  probes: tuple[dict, dict] | None = None, ext_dns: dict[str, str] | None = None,
                  hidden_namespaces: set[str] | None = None, sources: dict | None = None,
-                 flow_idle_seconds: float = 60):
+                 flow_idle_seconds: float = 60, internal_cidrs: list[str] | None = None,
+                 event_window_seconds: float = 3600):
         self.snap = snap
         self.reports = reports or []
         self.mesh = mesh or {}
@@ -108,6 +135,13 @@ class Builder:
         self.hidden = hidden_namespaces or set()
         self.sources = sources or {}
         self.flow_idle_seconds = flow_idle_seconds
+        self.event_window_seconds = event_window_seconds
+        self.internal_nets = list(INTERNAL_NETS)
+        for cidr in internal_cidrs or []:
+            try:
+                self.internal_nets.append(ipaddress.ip_network(cidr, strict=False))
+            except ValueError:
+                pass
         self.nodes: dict[str, dict] = {}
         self.svc_edges: dict[tuple[str, str], EdgeAcc] = defaultdict(EdgeAcc)   # (src node, svc id)
         self.edges: dict[tuple[str, str], EdgeAcc] = defaultdict(EdgeAcc)       # (src node, dst node)
@@ -129,8 +163,11 @@ class Builder:
         self._collapse_services()
         self._fold_ingress_controllers()
         self._cap_externals()
+        self._classify_externals()
         edges = self._finalize_edges()
         self._drop_hidden(edges)
+        diag = Diagnoser(self, edges, event_window_seconds=self.event_window_seconds)
+        diag.run()
         graph = {
             "generatedAt": iso_now(),
             "cluster": {"name": self.snap.get("clusterName", ""), "openshift": bool(self.snap.get("openshift")),
@@ -140,6 +177,8 @@ class Builder:
             "edges": edges,
         }
         score_graph(graph, listen=self._listen, node_probe=self._node_probe)
+        diag.finish(graph)
+        self._quota_ratio = diag.quota_ratio
         graph["namespaces"] = self._namespace_summary(graph)
         graph["externalHosts"] = sorted(self.external_hosts)
         return graph
@@ -321,7 +360,7 @@ class Builder:
                 "id": wid, "kind": "workload", "subkind": kind, "name": name, "namespace": ns,
                 "platform": bool(PLATFORM_NS.match(ns)), "replicas": {"desired": 0, "ready": 0, "current": 0},
                 "pods": [], "services": [], "images": [], "hosts": [], "template": None,
-                "hpa": None, "completed": False,
+                "hpa": None, "completed": False, "labels": {}, "diag": [],
             }
         return self.nodes[wid]
 
@@ -348,9 +387,23 @@ class Builder:
             if wl["template"] is None:
                 wl["template"] = spec
             cstats = status.get("containerStatuses") or []
-            restarts = sum(int(c.get("restartCount") or 0) for c in cstats)
+            istats = status.get("initContainerStatuses") or []
+            restarts = sum(int(c.get("restartCount") or 0) for c in cstats + istats)
             recent = 0
             reason = ""
+            # An init container that is failing or still running is the pod's real state (as kubectl shows it).
+            for i, c in enumerate(istats):
+                st = c.get("state") or {}
+                term, wait = st.get("terminated"), st.get("waiting")
+                if term and int(term.get("exitCode") or 0) == 0:
+                    continue
+                if term:
+                    reason = f"Init:{term.get('reason') or 'Error'}"
+                elif wait and wait.get("reason") and wait["reason"] != "PodInitializing":
+                    reason = f"Init:{wait['reason']}"
+                elif phase == "Pending":
+                    reason = f"Init:{i}/{len(istats)}"
+                break
             for c in cstats:
                 term = ((c.get("lastState") or {}).get("terminated") or {})
                 finished = parse_ts(term.get("finishedAt"))
@@ -385,7 +438,19 @@ class Builder:
             node_name = spec.get("nodeName", "")
             ip = status.get("podIP", "")
             terminal = phase in ("Failed", "Succeeded")
+            images = {c.get("name"): c.get("image", "") for c in containers + (spec.get("initContainers") or [])}
+            cinfo = [_container_info(c, images.get(c.get("name"), ""), init, now)
+                     for init, group in ((True, istats), (False, cstats)) for c in group]
+            ready_cond = next((c for c in status.get("conditions") or [] if c.get("type") == "Ready"), {})
+            not_ready_since = parse_ts(ready_cond.get("lastTransitionTime")) if not ready else None
+            deleted = parse_ts(meta(pod).get("deletionTimestamp"))
+            owner = controller_ref(pod) or {}
             pinfo = {
+                "containerInfo": cinfo, "owner": owner.get("name", ""), "ownerKind": owner.get("kind", ""),
+                "notReadyS": int((now - not_ready_since).total_seconds()) if not_ready_since else None,
+                "deletingS": int((now - deleted).total_seconds()) if deleted else None,
+                "claims": [v["persistentVolumeClaim"]["claimName"] for v in spec.get("volumes") or []
+                           if (v.get("persistentVolumeClaim") or {}).get("claimName")],
                 "name": pname, "phase": phase, "ready": ready, "restarts": restarts, "recentRestarts": recent,
                 "reason": reason, "message": message[:300], "node": node_name, "ip": ip,
                 "hostId": f"host:{node_name}" if node_name else UNSCHEDULED,
@@ -398,6 +463,8 @@ class Builder:
                 "ageSeconds": int((now - created).total_seconds()) if created else None,
             }
             wl["pods"].append(pinfo)
+            if not wl.get("labels"):
+                wl["labels"] = dict(labels_of(pod))
             for c in containers:
                 img = _short_image(c.get("image", ""))
                 if img and img not in wl["images"]:
@@ -460,6 +527,8 @@ class Builder:
                 wl["schedule"] = spec.get("schedule", "")
             template = (spec.get("jobTemplate") or {}).get("spec", {}).get("template") if kind == "CronJob" \
                 else spec.get("template")
+            if not wl["labels"]:
+                wl["labels"] = dict(((template or {}).get("metadata") or {}).get("labels") or {})
             if template and template.get("spec"):
                 wl["template"] = template["spec"]
                 for c in template["spec"].get("containers") or []:
@@ -620,11 +689,34 @@ class Builder:
         self.nodes[eid] = {"id": eid, "kind": "entry", "subkind": kind, "name": name, "namespace": ns,
                            "platform": bool(PLATFORM_NS.match(ns)), "hosts": [h for h in hosts if h], "tls": tls}
 
-    def _clients(self) -> str:
-        if "clients" not in self.nodes:
-            self.nodes["clients"] = {"id": "clients", "kind": "clients", "subkind": "Users", "name": "End users",
-                                     "namespace": ""}
-        return "clients"
+    def _clients(self, scope: str = "internet", seen_from: str = "") -> str:
+        """The outside world calling in. One node for everyone (a crowd, not addresses), split by where
+        they come from when the agent can see it: private source addresses are users on your own
+        network; public or unseen (behind a load balancer / SNAT) ones are end users on the internet."""
+        if scope == "lan":
+            nid = "clients:lan"
+            if nid not in self.nodes:
+                self.nodes[nid] = {"id": nid, "kind": "clients", "subkind": "Users", "name": "Users on your network",
+                                   "namespace": "", "scope": "lan", "seenFrom": [],
+                                   "scopeWhy": "connections seen arriving from private addresses"}
+        else:
+            nid = "clients"
+            if nid not in self.nodes:
+                self.nodes[nid] = {"id": nid, "kind": "clients", "subkind": "Users", "name": "End users",
+                                   "namespace": "", "scope": "internet", "seenFrom": [],
+                                   "scopeWhy": "anyone reaching your exposed services from outside your network, "
+                                               "or whose address is hidden by a load balancer"}
+        seen = self.nodes[nid]["seenFrom"]
+        if seen_from and seen_from not in seen and len(seen) < 12:
+            seen.append(seen_from)
+        return nid
+
+    def _is_internal_ip(self, ip: str) -> bool:
+        try:
+            addr = ipaddress.ip_address(normalize_ip(ip))
+        except ValueError:
+            return False
+        return any(addr in net for net in self.internal_nets if net.version == addr.version)
 
     def _external(self, key: str, label: str | None = None, detail: str = "") -> str:
         eid = f"ext:{key}"
@@ -727,7 +819,7 @@ class Builder:
             return None if as_source else self._external(f"node/{key}", f"{key} (host)")
         if kind == "ext":
             if as_source:
-                return self._clients()
+                return self._clients("lan" if self._is_internal_ip(key) else "internet", key)
             host = self.ext_dns.get(key)
             return self._external(host, detail=key) if host else self._external(key)
         return None
@@ -755,7 +847,7 @@ class Builder:
             d_node = self._entity_node(dst, as_source=False)
             if not s_node or not d_node or s_node == d_node:
                 continue
-            if s_node == "clients" and d_node.startswith("ext:"):
+            if self.nodes.get(s_node, {}).get("kind") == "clients" and d_node.startswith("ext:"):
                 continue
             if s_node.startswith("svc:") and d_node.startswith("wl:"):
                 # conntrack: which backend answered a VIP - that edge is the Service itself.
@@ -862,7 +954,7 @@ class Builder:
         for eid in entries:
             cls = self.entry_class.get(eid, "")
             ctrl = next((c for c in controllers if cls and cls in self.nodes[c]["name"]), controllers[0])
-            user_edge = self.edges.pop(("clients", eid), None)
+            user_edge = self.edges.pop(("clients", eid), None)      # declared exposure is always 'clients'
             acc = self.edges[(ctrl, eid)]
             acc.evidence.add("declared")
             acc.etype = "route"
@@ -878,6 +970,35 @@ class Builder:
                     if direct.mesh:
                         self.edges[(eid, backend)].mesh = direct.mesh
                         self.edges[(eid, backend)].evidence.add("mesh")
+
+    def _classify_externals(self) -> None:
+        """Where an external dependency lives: 'lan' (your own network, outside the cluster),
+        'internet' (public), or 'cluster' (the API server / nodes themselves)."""
+        host_ips: dict[str, list[str]] = defaultdict(list)
+        for ip, host in self.ext_dns.items():
+            host_ips[host].append(ip)
+
+        internal = self._is_internal_ip
+
+        for nid, n in self.nodes.items():
+            if n["kind"] != "external":
+                continue
+            if nid == "ext:kube-apiserver" or nid.startswith("ext:node/"):
+                n["scope"], n["scopeWhy"] = "cluster", "part of the cluster itself"
+                continue
+            ips = [a for a in n.get("addresses", []) + [n["name"]] + host_ips.get(n["name"], []) if is_ip(normalize_ip(a))]
+            ips = [normalize_ip(a) for a in ips]
+            name = n["name"].lower()
+            if ips:
+                inside = [ip for ip in ips if internal(ip)]
+                if len(inside) == len(ips):
+                    n["scope"], n["scopeWhy"] = "lan", f"private address {inside[0]}"
+                else:
+                    n["scope"], n["scopeWhy"] = "internet", f"public address {next(ip for ip in ips if not internal(ip))}"
+            elif INTERNAL_SUFFIX.search(name):
+                n["scope"], n["scopeWhy"] = "lan", "internal domain name"
+            else:
+                n["scope"], n["scopeWhy"] = "internet", "public hostname (not resolved)"
 
     def _cap_externals(self) -> None:
         ext_ids = [nid for nid, n in self.nodes.items() if n["kind"] == "external"]
@@ -911,7 +1032,7 @@ class Builder:
             if src not in self.nodes or dst not in self.nodes or src == dst:
                 continue
             etype = acc.etype
-            if src == "clients":
+            if self.nodes[src]["kind"] == "clients":
                 etype = "exposes"
             elif self.nodes[src]["kind"] == "entry":
                 etype = "route"
@@ -984,19 +1105,44 @@ class Builder:
         edges[:] = [e for e in edges if e["source"] not in gone and e["target"] not in gone]
 
     def _namespace_summary(self, graph: dict) -> list[dict]:
+        """Per-project scorecard: what is running, what is healthy, and the worst thing wrong."""
         out: dict[str, dict] = {}
+
+        def row(ns: str) -> dict:
+            return out.setdefault(ns, {
+                "name": ns, "platform": bool(PLATFORM_NS.match(ns)), "workloads": 0, "pods": 0, "warning": 0,
+                "critical": 0, "healthy": 0, "degraded": 0, "down": 0, "podsReady": 0, "restarts1h": 0,
+                "rolling": 0, "findings": {"critical": 0, "warning": 0, "info": 0}, "top": None, "quota": None})
+
         for n in graph["nodes"]:
             ns = n.get("namespace")
             if not ns:
                 continue
-            s = out.setdefault(ns, {"name": ns, "platform": bool(PLATFORM_NS.match(ns)), "workloads": 0, "pods": 0,
-                                    "warning": 0, "critical": 0})
+            s = row(ns)
+            lvl = (n.get("risk") or {}).get("level")
             if n["kind"] == "workload":
+                live = [p for p in n["pods"] if not p["terminal"]]
                 s["workloads"] += 1
                 s["pods"] += len(n["pods"])
-            lvl = (n.get("risk") or {}).get("level")
+                s["podsReady"] += sum(1 for p in live if p["ready"])
+                s["restarts1h"] += sum(p.get("recentRestarts", 0) for p in live)
+                if (n.get("rollout") or {}).get("state") in ("progressing", "stuck", "failed"):
+                    s["rolling"] += 1
+                r = n["replicas"]
+                down = r["desired"] > 0 and r["ready"] == 0 and n["subkind"] not in ("CronJob", "Job")
+                s["down" if down else "degraded" if lvl in ("warning", "critical") else "healthy"] += 1
             if lvl in ("warning", "critical"):
                 s[lvl] += 1
+        for f in graph.get("findings", []):
+            if not f["namespace"]:
+                continue
+            s = row(f["namespace"])
+            s["findings"][f["severity"]] += 1
+            if s["top"] is None and f["severity"] != "info" and f["root"]:
+                s["top"] = {"id": f["id"], "title": f["title"], "subjectName": f["subjectName"], "severity": f["severity"]}
+        for ns, ratio in getattr(self, "_quota_ratio", {}).items():
+            if ns in out:
+                out[ns]["quota"] = round(ratio, 3)
         return sorted(out.values(), key=lambda x: (x["platform"], x["name"]))
 
     def _endpoint_probes(self) -> None:
@@ -1014,6 +1160,10 @@ def public(graph: dict) -> dict:
     """Strip builder-only fields (pod templates may hold env values) before serving."""
     for n in graph["nodes"]:
         n.pop("template", None)
+        n.pop("labels", None)
+        n.pop("diag", None)
+    for e in graph["edges"]:
+        e.pop("diag", None)
     return graph
 
 
@@ -1047,8 +1197,8 @@ def filter_graph(graph: dict, namespaces: list[str] | None, include_platform: bo
         edges.append(e)
     # Show the outside-world path into ghost entries too (clients -> controller -> route).
     for e in graph["edges"]:
-        if e["target"] in ghosts and e["source"] == "clients" and e not in edges:
-            keep.add("clients")
+        if e["target"] in ghosts and nodes[e["source"]]["kind"] == "clients" and e not in edges:
+            keep.add(e["source"])
             edges.append(e)
     used_hosts = {p["hostId"] for nid in keep if nodes[nid]["kind"] == "workload" for p in nodes[nid]["pods"]}
     out_nodes = []
@@ -1070,4 +1220,18 @@ def filter_graph(graph: dict, namespaces: list[str] | None, include_platform: bo
         if c["root"] in keep_ids and impacted:
             dominant = [x for x in c.get("dominant", []) if x in keep]
             out["cascades"].append(dict(c, impacted=impacted, dominant=dominant, count=len(impacted)))
+
+    def ns_in_scope(ns: str, platform: bool) -> bool:
+        if namespaces:
+            return ns in namespaces
+        return include_platform or not platform
+
+    # Findings: everything in the selected projects, plus cluster-level ones (nodes, platform), which
+    # explain project symptoms whatever the filter.
+    out["findings"] = [f for f in graph.get("findings", [])
+                       if (f["namespace"] and ns_in_scope(f["namespace"], f["platform"]))
+                       or (not f["namespace"] and (f["category"] in ("node", "platform") or f["subject"] in keep_ids))]
+    out["changes"] = [c for c in graph.get("changes", [])
+                      if (c["namespace"] and ns_in_scope(c["namespace"], bool(PLATFORM_NS.match(c["namespace"]))))
+                      or (not c["namespace"])]
     return out

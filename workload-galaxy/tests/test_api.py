@@ -47,3 +47,40 @@ def test_page_loads_code_from_build_versioned_urls():
         assert c.get("/v/some-old-build/js/main.js").headers["cache-control"] == "no-cache"
         assert c.get(f"/v/{bid}/../../collector/galaxy/config.py").status_code == 404
         assert c.get(f"/v/{bid}/%2e%2e/%2e%2e/VERSION").status_code == 404
+
+
+def test_triage_endpoint_serves_the_dashboard_as_data_and_logs_are_scoped():
+    with TestClient(main.app) as c:
+        main.state.source.set_scenarios(["bad-rollout", "quota-exceeded"])
+        main.state.refresh_once()
+        t = c.get("/api/v1/triage").json()
+        assert t["counts"]["critical"] >= 3 and t["rootCauses"] >= 3
+        assert any(f["category"] == "rollout" for f in t["findings"]) and t["platform"]["nodes"]["total"] == 3
+        only = c.get("/api/v1/triage?ns=payments&severity=critical").json()
+        assert only["findings"] and all(f["severity"] == "critical" for f in only["findings"])
+        assert {p["name"] for p in only["projects"]} == {"payments"}
+        assert all(f["namespace"] in ("payments", "") for f in only["findings"])
+        topo = c.get("/api/v1/topology").json()
+        assert all("template" not in n and "labels" not in n and "diag" not in n for n in topo["nodes"])
+        search = next(n for n in topo["nodes"] if n["id"] == "wl:storefront/Deployment/search")
+        crashing = next(p for p in search["pods"] if not p["ready"])
+        lines = c.get(f"/api/v1/logs?ns=storefront&pod={crashing['name']}&previous=true").json()["lines"]
+        assert any("FATAL" in x for x in lines)
+        main.state.source.set_scenarios([])
+        main.state.refresh_once()
+
+
+def test_real_cluster_logs_are_off_unless_enabled(monkeypatch):
+    monkeypatch.setattr(main.settings, "mode", "cluster")
+    monkeypatch.setattr(main.settings, "pod_logs", False)
+    with TestClient(main.app) as c:
+        assert c.get("/api/v1/logs?ns=storefront&pod=x").status_code == 403
+
+
+def test_showcase_presets_only_name_real_scenarios():
+    from galaxy.scenarios import PRESETS, SCENARIOS
+    assert len(PRESETS) >= 4
+    for p in PRESETS:
+        assert p["title"] and p["summary"] and set(p["scenarios"]) <= set(SCENARIOS)
+    with TestClient(main.app) as c:
+        assert [p["id"] for p in c.get("/api/v1/demo/scenarios").json()["presets"]] == [p["id"] for p in PRESETS]

@@ -40,10 +40,28 @@ RESOURCES: dict[str, tuple[str, str, bool]] = {
     "httproutes": ("/apis/gateway.networking.k8s.io/v1", "httproutes", True),
     "podmetrics": ("/apis/metrics.k8s.io/v1beta1", "pods", True),
     "nodes": ("/api/v1", "nodes", False),
+    # Troubleshooting sources (diagnose.py): why a deployment is failing, not just that it is.
+    "events": ("/api/v1", "events", True),
+    "persistentvolumeclaims": ("/api/v1", "persistentvolumeclaims", True),
+    "resourcequotas": ("/api/v1", "resourcequotas", True),
+    "networkpolicies": ("/apis/networking.k8s.io/v1", "networkpolicies", True),
+    "controllerrevisions": ("/apis/apps/v1", "controllerrevisions", True),
+    "namespaces": ("/api/v1", "namespaces", False),
+    "certificates": ("/apis/cert-manager.io/v1", "certificates", True),
+    "clusteroperators": ("/apis/config.openshift.io/v1", "clusteroperators", False),
+    "clusterversions": ("/apis/config.openshift.io/v1", "clusterversions", False),
+    "machineconfigpools": ("/apis/machineconfiguration.openshift.io/v1", "machineconfigpools", False),
 }
 
+# Extra list parameters. Only Warning events are fetched: they are the ones that explain failures,
+# and a busy cluster holds tens of thousands of Normal ones.
+QUERY: dict[str, dict[str, str]] = {"events": {"fieldSelector": "type=Warning"}}
+
 # Optional resources: a 404 here is normal and not worth a warning.
-OPTIONAL = {"routes", "deploymentconfigs", "httproutes", "podmetrics", "replicationcontrollers", "hpas"}
+OPTIONAL = {"routes", "deploymentconfigs", "httproutes", "podmetrics", "replicationcontrollers", "hpas",
+            "certificates", "clusteroperators", "clusterversions", "machineconfigpools"}
+# Cluster-scoped extras a namespace-scoped (non-admin) install cannot list: skipped quietly.
+QUIET_403 = {"namespaces", "clusteroperators", "clusterversions", "machineconfigpools"}
 
 # Fields that are large and never used; dropped to keep snapshots small.
 _DROP_META = ("managedFields",)
@@ -98,11 +116,27 @@ class KubeSource:
             return json.loads(resp.data)
         raise KubeError(401, "unauthorized")
 
-    def list_path(self, path: str) -> list[dict]:
+    def get_text(self, path: str, query: dict[str, Any] | None = None, timeout: float = 15) -> str:
+        """Raw text GET (pod logs)."""
+        params = [(k, v) for k, v in (query or {}).items() if v is not None]
+        req = self.api.param_serialize(method="GET", resource_path=path, query_params=params,
+                                       header_params={"Accept": "*/*"}, auth_settings=["BearerToken"])
+        resp = self.api.call_api(*req, _request_timeout=timeout)
+        resp.read()
+        if resp.status >= 400:
+            raise KubeError(resp.status, (resp.data or b"")[:300].decode("utf-8", "replace"))
+        return (resp.data or b"").decode("utf-8", "replace")
+
+    def pod_logs(self, ns: str, pod: str, container: str | None, previous: bool, tail: int = 80) -> str:
+        return self.get_text(f"/api/v1/namespaces/{ns}/pods/{pod}/log",
+                             {"container": container, "previous": "true" if previous else None,
+                              "tailLines": tail, "limitBytes": 65536, "timestamps": "true"})
+
+    def list_path(self, path: str, query: dict[str, str] | None = None, max_items: int = 20000) -> list[dict]:
         items: list[dict] = []
         cont = None
         while True:
-            data = self.get(path, {"limit": 500, "continue": cont})
+            data = self.get(path, {**(query or {}), "limit": 500, "continue": cont})
             for item in data.get("items", []):
                 md = item.get("metadata") or {}
                 for key in _DROP_META:
@@ -110,7 +144,7 @@ class KubeSource:
                 (md.get("annotations") or {}).pop("kubectl.kubernetes.io/last-applied-configuration", None)
                 items.append(item)
             cont = (data.get("metadata") or {}).get("continue")
-            if not cont:
+            if not cont or len(items) >= max_items:
                 return items
 
     # -- discovery --------------------------------------------------------
@@ -145,6 +179,8 @@ class KubeSource:
         for key, (prefix, plural, namespaced) in RESOURCES.items():
             if key == "configmaps" and not self.settings.read_configmaps:
                 continue
+            if scoped and not namespaced and key != "nodes":
+                continue   # namespace-scoped install: no cluster-level extras
             if namespaced and scoped:
                 jobs.extend((key, f"{prefix}/namespaces/{ns}/{plural}") for ns in scoped)
             else:
@@ -153,9 +189,11 @@ class KubeSource:
         def fetch(job: tuple[str, str]):
             key, path = job
             try:
-                return key, self.list_path(path), None
+                return key, self.list_path(path, QUERY.get(key)), None
             except KubeError as err:
                 if err.status == 404 and key in OPTIONAL:
+                    return key, [], None
+                if err.status == 403 and key in QUIET_403:
                     return key, [], None
                 if err.status == 404 and key == "podmetrics":
                     return key, [], "metrics.k8s.io unavailable (no CPU/memory usage)"

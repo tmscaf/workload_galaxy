@@ -14,6 +14,8 @@ const C = {
   cyan: new THREE.Color('#4fd1ff'), violet: new THREE.Color('#a07bff'), warn: new THREE.Color('#ffb547'),
   crit: new THREE.Color('#ff4d6d'), inferred: new THREE.Color('#8391b8'), white: new THREE.Color('#ffffff'),
   entry: new THREE.Color('#5ff1d9'), external: new THREE.Color('#93a9ff'), clients: new THREE.Color('#cfe9ff'),
+  // Where an external dependency lives: your own network, the internet, or the cluster's own infrastructure.
+  lan: new THREE.Color('#5ee6a8'), internet: new THREE.Color('#ffd75e'), clusterExt: new THREE.Color('#9fdcff'),
   podOk: new THREE.Color('#8f7dff'), hostOk: new THREE.Color('#c6fff0'), idle: new THREE.Color('#58627e'),
   up: new THREE.Color('#34e3b0'), down: new THREE.Color('#b18cff'),
 };
@@ -33,7 +35,9 @@ const VIEWS = ['galaxy', 'strata', 'cascade', 'gibson'];
 const ISO = new THREE.Vector3(0.6, 0.62, 0.95).normalize();
 const GIBSON_FOV = 26;
 const TEAL = new THREE.Color('#5cf2dc');
-const COLUMN_COLOR = { users: '#4fd1ff', hop: '#6f7dff', external: '#93a9ff', hosts: '#19c9a0' };
+const COLUMN_COLOR = { users: '#4fd1ff', hop: '#6f7dff', external: '#93a9ff', lan: '#5ee6a8', internet: '#ffd75e', hosts: '#19c9a0' };
+const SCOPE_LABEL = { lan: 'LAN', internet: 'INTERNET', cluster: 'CLUSTER' };
+const scopeColor = (scope) => (scope === 'lan' ? C.lan : scope === 'cluster' ? C.clusterExt : C.internet);
 const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
 const PARTICLE_VS = `
@@ -333,6 +337,8 @@ export class GalaxyScene {
         : Array.from({ length: count }, (_, k) => (k + hash01(e.id)) / count);
       return {
         data: e, inferredOnly, idle, lvl, level, count, phases,
+        extScope: byId.get(e.target)?.kind === 'external' ? (byId.get(e.target).scope || 'internet') : null,
+        inScope: byId.get(e.source)?.kind === 'clients' && byId.get(e.source).scope === 'lan' ? 'lan' : null,
         slow: 1 / (1 + Math.log10(1 + (est || 0) / 25)),
         p0: new THREE.Vector3(), p1: new THREE.Vector3(), p2: new THREE.Vector3(), len: 1,
         ...routeOf(L.city.routes.get(e.id)),
@@ -416,9 +422,12 @@ export class GalaxyScene {
       color = lvlColor ? lvlColor.clone() : base.lerp(C.white, 0.35);
       if (n.idle) color = C.idle.clone();
       size = 9 + 4.2 * Math.sqrt(Math.max(1, n.pods.length));
-    } else if (n.kind === 'clients') { color = C.clients.clone(); size = 30; }
+    } else if (n.kind === 'clients') {   // users on your network: smaller and green, like the rest of your LAN
+      color = n.scope === 'lan' ? C.lan.clone().lerp(C.white, 0.45) : C.clients.clone();
+      size = n.scope === 'lan' ? 20 : 30;
+    }
     else if (n.kind === 'entry') { color = C.entry.clone(); size = 12; }
-    else if (n.kind === 'external') { color = C.external.clone(); size = 11; }
+    else if (n.kind === 'external') { color = scopeColor(n.scope).clone(); size = 11; }
     else if (n.kind === 'service') { color = C.crit.clone(); size = 11; }
     else { color = lvlColor ? lvlColor.clone() : C.hostOk.clone(); size = 14; }
     if (n.ghost) color.lerp(new THREE.Color('#566180'), 0.55);
@@ -453,13 +462,17 @@ export class GalaxyScene {
       }
     }
     obj.pulse = lvl === 'critical';
-    const metric = n.kind !== 'host' ? nodeMetric(n, this.inbound.get(n.id))
+    const ro = n.rollout && { progressing: 'rolling out', stuck: 'rollout stuck', failed: 'rollout failed' }[n.rollout.state];
+    const metric = n.kind !== 'host' ? [ro, nodeMetric(n, this.inbound.get(n.id))].filter(Boolean).join(' · ')
       : n.pseudo ? `${n.podCount} pod${n.podCount === 1 ? '' : 's'} waiting for a node`
       : [`${n.podCount} pods`, n.memRequestRatio != null ? `mem ${Math.round(n.memRequestRatio * 100)}% reserved` : '',
         n.cpuRatio != null ? `cpu ${Math.round(n.cpuRatio * 100)}%` : ''].filter(Boolean).join(' · ');
-    obj.label.element.className = `lbl ${lvl}${n.ghost ? ' ghost' : ''}`;
+    const lanUsers = n.kind === 'clients' && n.scope === 'lan';
+    obj.label.element.className = `lbl ${lvl}${n.ghost ? ' ghost' : ''}${n.kind === 'external' ? ` ext-${n.scope || 'internet'}` : lanUsers ? ' ext-lan' : ''}`;
     const nsBit = n.ghost && n.namespace ? `<span class="m">${esc(n.namespace)}/</span>` : '';
-    obj.label.element.innerHTML = `<div class="n">${nsBit}${esc(n.name)}</div>${metric ? `<div class="m">${esc(metric)}</div>` : ''}`;
+    const scopeTag = n.kind === 'external' ? `<span class="scope">${SCOPE_LABEL[n.scope] || 'INTERNET'}</span> `
+      : lanUsers ? '<span class="scope">LAN</span> ' : '';
+    obj.label.element.innerHTML = `<div class="n">${nsBit}${esc(n.name)}</div>${metric || scopeTag ? `<div class="m">${scopeTag}${esc(metric || '')}</div>` : ''}`;
     obj.labelY = n.kind === 'host' ? 7 : size * 0.45;
     obj.label.position.set(0, obj.labelY, 0);
   }
@@ -584,7 +597,9 @@ export class GalaxyScene {
     this.cascadeByRoot = new Map();
     for (const c of this.graph.cascades || []) {
       const impacted = new Set(c.impacted);
-      if (c.userFacing && this.nodes.has('clients')) impacted.add('clients');   // carry the pulse out to users
+      if (c.userFacing) {   // carry the pulse out to the users (internet and your network)
+        for (const [id, o] of this.nodes) if (o.data.kind === 'clients') impacted.add(id);
+      }
       const mine = [];
       const add = (l) => {
         l.key = `${c.root}|${l.edge ? l.edge.data.id : `${l.from}>${l.to}`}`;
@@ -734,6 +749,15 @@ export class GalaxyScene {
     rect(b.x0, b.z0, b.x1, b.z1, lineMat('#6f7dff', 0.6), 0);
 
     // Districts: one plate per namespace / project.
+    // Connector zones: one tinted plate per row (your network / the internet), labelled at its back
+    // end, clear of the connector names along it.
+    for (const r of L.rims || []) {
+      const sc = scopeColor(r.scope);
+      ground(r.w, r.z1 - r.z0, fillMat(sc, 0.07), r.x, (r.z0 + r.z1) / 2, 0.04);
+      rect(r.x - r.w / 2, r.z0, r.x + r.w / 2, r.z1, lineMat(sc, 0.75));
+      label(`<div class="n">${r.scope === 'lan' ? 'Your network' : 'Internet'}</div><div class="m">${r.scope === 'lan' ? 'private addresses, outside the cluster' : 'public addresses'}</div>`,
+        'district', `#${sc.getHexString()}`, r.x - r.w / 2 + 2, 0.3, r.z0 + 1);
+    }
     for (const d of L.districts) {
       const c = new THREE.Color(nsColor(d.namespace, d.platform));
       ground(d.x1 - d.x0, d.z1 - d.z0, fillMat(c, 0.06), (d.x0 + d.x1) / 2, (d.z0 + d.z1) / 2, 0.05);
@@ -742,18 +766,51 @@ export class GalaxyScene {
         nsColor(d.namespace, d.platform), d.x0 + 2, 0.3, d.z1 - 1);
     }
 
-    // The gate: where end users come in.
+    // The internet gateway, on the board's front edge: the only way between your network and the
+    // internet. A faint portal fills the arch; every internet-bound trace passes through it.
     const gm = lineMat('#4fd1ff', 0.9);
     for (const sx of [-16, 16]) boxEdges(3, 18, 3, gm, L.gate.x + sx, 9, L.gate.z);
     boxEdges(38, 3, 3, gm, L.gate.x, 19.5, L.gate.z);
+    const portal = new THREE.Mesh(new THREE.PlaneGeometry(29, 18), fillMat('#4fd1ff', 0.08, null, null, true));
+    portal.position.set(L.gate.x, 9, L.gate.z);
+    this.cityGroup.add(portal);
+    label('<div class="n">Internet gateway</div><div class="m">in and out of your network</div>', 'district', '#4fd1ff',
+      L.gate.x - 18, 26, L.gate.z);
+    // The internet: its own plane below and beyond the board, holding the end users and every internet
+    // service. Your network stays on the board.
+    if (L.internet) {
+      const I = L.internet;
+      ground(I.x1 - I.x0, I.z1 - I.z0, fillMat(C.internet, 0.05), (I.x0 + I.x1) / 2, (I.z0 + I.z1) / 2, I.y);
+      rect(I.x0, I.z0, I.x1, I.z1, lineMat(C.internet, 0.7), I.y + 0.1);
+      // A funnel from the gateway's two pillars down to the plane's back corners: the plane hangs off
+      // the gateway (its only way in), so these always land on something, however wide the plane is.
+      const sm = lineMat(C.internet, 0.25);
+      for (const [px, x] of [[L.gate.x - 16, I.x0], [L.gate.x + 16, I.x1]]) {
+        const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(px, 0, L.gate.z),
+          new THREE.Vector3(x, I.y, I.z0)]), sm);
+        this.cityGroup.add(l);
+      }
+      // Centred on the plane's front edge (labels are centred on their anchor), clear of the traces.
+      // Two zones by role: who comes in, and what the cluster calls out to. Their captions name the
+      // plane too (one label per zone keeps the front edge readable).
+      const role = { in: ['Internet · coming in', 'users of your exposed services', '#cfe9ff'],
+        out: ['Internet · called from the cluster', 'your workloads connect out to these', '#ffd75e'] };
+      for (const z of I.zones || []) {
+        const [name, sub, col] = role[z.role];
+        ground(z.x1 - z.x0, z.z1 - z.z0, fillMat(col, 0.04), (z.x0 + z.x1) / 2, (z.z0 + z.z1) / 2, I.y + 0.05);
+        rect(z.x0, z.z0, z.x1, z.z1, lineMat(col, 0.45), I.y + 0.12);
+        label(`<div class="n">${name}</div><div class="m">${sub}</div>`, 'district', col, (z.x0 + z.x1) / 2, I.y + 0.3, z.z1 + 7);
+      }
+    }
 
     // Edge connectors (external dependencies) and chip pads (hosts).
     for (const n of this.graph.nodes) {
       const pos = L.pos.get(n.id);
       if (!pos) continue;
       if (n.kind === 'external') {
-        boxEdges(12, 1.2, 7, lineMat('#e9c46a', 0.85), pos.x, 0.6, pos.z);
-        ground(12, 7, fillMat('#e9c46a', 0.12), pos.x, pos.z, 0.1);
+        const sc = scopeColor(n.scope);
+        boxEdges(12, 1.2, 7, lineMat(sc, 0.9), pos.x, pos.y + 0.6, pos.z);
+        ground(12, 7, fillMat(sc, 0.14), pos.x, pos.z, pos.y + 0.1);
       } else if (n.kind === 'host') {
         ground(S * 1.3, S * 0.9, fillMat(n.pseudo ? C.crit : C.up, 0.08), pos.x, pos.z, 0.08);
         rect(pos.x - S * 0.65, pos.z - S * 0.45, pos.x + S * 0.65, pos.z + S * 0.45, lineMat(n.pseudo ? C.crit : C.up, 0.6));
@@ -865,13 +922,23 @@ export class GalaxyScene {
       T(`SVC ${sv.name} ${sv.type} ${sv.ports.join(',')}${sv.lbIPs.length ? ' @' + sv.lbIPs[0] : ''} · ${sv.readyEndpoints} READY${sv.notReadyEndpoints ? ` ${sv.notReadyEndpoints} NOT` : ''}`, faint, 12, 500);
     }
     if (n.hosts.length) T(`HOSTS ${n.hosts.join(', ')}`, faint, 12, 500);
-    // Issue cards, boxed like a terminal alert: the workload's own reasons, then pod issues.
+    if (n.rollout) {
+      const ro = n.rollout;
+      T(`ROLLOUT ${ro.state.toUpperCase()}${ro.revision ? ' · REV ' + ro.revision : ''}${ro.ageSeconds != null ? ' · ' + fmtAge(ro.ageSeconds) + ' AGO' : ''}`,
+        ro.state === 'complete' ? faint : ro.state === 'progressing' ? warn : bad, 12, 600);
+      for (const c of ro.state === 'complete' ? [] : ro.changes.slice(0, 3)) T(`  ${c}`, faint, 11, 500);
+    }
+    // Diagnosis first (what is wrong and what to do), then the raw signals and pod issues.
     const seen = new Set();
     const cards = [];
+    for (const f of (this.graph.findings || []).filter((x) => x.subject === n.id && x.severity !== 'info').slice(0, 3)) {
+      cards.push([f.severity, `${f.title}. NEXT: ${f.fix}`]);
+      seen.add(f.title);
+    }
     for (const x of r.reasons || []) cards.push([x.weight >= 0.6 ? 'critical' : 'warning', x.text]);
     for (const p of n.pods) for (const i of p.issues || []) if (podLevel(p) === 'critical' || podLevel(p) === 'warning') cards.push([podLevel(p), `${p.name.slice(-5)}: ${i}`]);
     for (const [lvl, text] of cards) {
-      if (seen.has(text) || seen.size >= 4) continue;
+      if (seen.has(text) || seen.size >= 5) continue;
       seen.add(text);
       out.push({ card: lvl, title: lvl === 'critical' ? 'ERROR' : 'WARNING', t: text });
     }
@@ -1039,7 +1106,12 @@ export class GalaxyScene {
       if (c.warning) bits.push(`${c.warning} warning`);
       if (c.evicted) bits.push(`${c.evicted} evicted`);
       if (c.unscheduled) bits.push(`${c.unscheduled} unscheduled`);
-      o.div.innerHTML = `<div class="n">${L.label}</div><div class="m">${bits.join(' · ')}</div>`;
+      let name = L.label;
+      if (L.key === 'users' && p.internet) {   // internet dependencies share the top plane with the users
+        name = 'Users & internet';
+        bits[0] = `${c.shown} user group${c.shown === 1 ? '' : 's'} + ${p.internet} internet service${p.internet === 1 ? '' : 's'}`;
+      }
+      o.div.innerHTML = `<div class="n">${name}</div><div class="m">${bits.join(' · ')}</div>`;
     }
   }
 
@@ -1080,13 +1152,36 @@ export class GalaxyScene {
     let pos, target = new THREE.Vector3(0, 0, 0);
     if (this.view === 'gibson') {
       // Isometric overview of the whole board, fitted into the visible part of the canvas.
-      const b = this.layout ? this.layout.city.bounds : { x0: -150, x1: 150, z0: -150, z1: 150 };
-      target = new THREE.Vector3((b.x0 + b.x1) / 2, 0, (b.z0 + b.z1) / 2);
+      // Measure what the camera actually sees: the board's corners, the internet plane below it and
+      // the tower tops, projected onto the screen axes for the iso direction. The board alone is a
+      // rectangle, but with the internet plane jutting out in front a centred-box guess pushes it
+      // under the rail.
+      const city = this.layout?.city;
+      const b = city ? city.bounds : { x0: -150, x1: 150, z0: -150, z1: 150 };
+      const pts = [[b.x0, 0, b.z0], [b.x1, 0, b.z0], [b.x0, 0, b.z1], [b.x1, 0, b.z1]];
+      const I = city?.internet;
+      if (I) pts.push([I.x0, I.y, I.z0], [I.x1, I.y, I.z0], [I.x0, I.y, I.z1], [I.x1, I.y, I.z1]);
+      for (const [wid, t] of this.towers || []) {
+        const p = this.nodes.get(wid)?.gibTarget;
+        if (p) pts.push([p.x, t.height + 6, p.z]);
+      }
+      const fwd = ISO.clone().negate();
+      const ax = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
+      const ay = new THREE.Vector3().crossVectors(ax, fwd).normalize();
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      const v = new THREE.Vector3();
+      for (const [x, y, z] of pts) {
+        v.set(x, y, z);
+        const sx = v.dot(ax), sy = v.dot(ay);
+        x0 = Math.min(x0, sx); x1 = Math.max(x1, sx); y0 = Math.min(y0, sy); y1 = Math.max(y1, sy);
+      }
+      target = new THREE.Vector3().addScaledVector(ax, (x0 + x1) / 2).addScaledVector(ay, (y0 + y1) / 2);
       const vw = this.container.clientWidth || window.innerWidth;
       const { left = 0, right = 0 } = this.insetPx || {};
       const frac = Math.max(0.4, (vw - left - right) / vw);
-      const span = Math.hypot(b.x1 - b.x0, b.z1 - b.z0) / 2;
-      const dist = (span * 0.72) / (Math.tan((GIBSON_FOV * Math.PI) / 360) * Math.min(1, this.camera.aspect * frac));
+      const tanV = Math.tan((GIBSON_FOV * Math.PI) / 360);
+      // The bottom ~110px of the canvas is under the legend; keep a margin for perspective.
+      const dist = 1.1 * Math.max((x1 - x0) / 2 / (tanV * this.camera.aspect * frac), (y1 - y0) / 2 / (tanV * 0.84));
       this._flyTo(target.clone().addScaledVector(ISO, dist), target, instant ? 0 : 1.2);
       return;
     }
@@ -1099,7 +1194,7 @@ export class GalaxyScene {
       const { left = 0, right = 0 } = this.insetPx || {};
       const frac = Math.max(0.35, (vw - left - right) / vw);
       const tanV = Math.tan((this.camera.fov * Math.PI) / 360);
-      const dist = Math.max((w / 2 + 70) / (tanV * this.camera.aspect * frac), (h / 2 + 80) / tanV, 220);
+      const dist = Math.max((w / 2 + 105) / (tanV * this.camera.aspect * frac), (h / 2 + 80) / tanV, 220);   // room for edge labels
       pos = new THREE.Vector3(-w * 0.08, h * 0.15 + dist * 0.12, dist);
       target = new THREE.Vector3(0, -10, 0);
     } else pos = new THREE.Vector3(0, ext * 1.45, ext * 1.75);
@@ -1116,7 +1211,7 @@ export class GalaxyScene {
       const p = obj.gibTarget;
       const tanH = Math.tan((GIBSON_FOV * Math.PI) / 360);
       if (!t) {   // not a tower (gate, connector, host): approach it at the isometric angle
-        const target = new THREE.Vector3(p.x, 4, p.z);
+        const target = new THREE.Vector3(p.x, p.y + 4, p.z);
         this._flyTo(target.clone().addScaledVector(ISO, 46 / tanH), target, 0.9);
         return;
       }
@@ -1215,7 +1310,7 @@ export class GalaxyScene {
       const c = entry.cascade;
       if (this.nodes.has(c.root)) nodes.add(c.root);
       for (const id of c.impacted) nodes.add(id);
-      if (c.userFacing && this.nodes.has('clients')) nodes.add('clients');
+      if (c.userFacing) for (const [id, o] of this.nodes) if (o.data.kind === 'clients') nodes.add(id);
       for (const l of entry.links) {
         if (l.edge) { edges.add(l.edge.data.id); nodes.add(l.edge.data.source); nodes.add(l.edge.data.target); }
       }
@@ -1312,7 +1407,10 @@ export class GalaxyScene {
   }
 
   // ------------------------------------------------------------------ frame loop
+  setPaused(paused) { this.paused = !!paused; }
+
   _frame() {
+    if (this.paused) return;
     const dt = Math.min(0.05, this.clock.getDelta());
     this.time += dt;
     // View weights glide toward the selected view and always sum to 1.
@@ -1488,6 +1586,13 @@ export class GalaxyScene {
   }
 
   _edgeColor(e, t, out) {
+    // Calls leaving the cluster fade from cyan into the colour of where they go (LAN / internet);
+    // warning and critical still win, so a failing external call is never hidden by its scope colour.
+    if (e.extScope && e.lvl === 'ok') {
+      const sc = scopeColor(e.extScope);
+      return e.inferredOnly ? out.copy(sc).lerp(C.inferred, 0.35) : out.copy(C.cyan).lerp(sc, Math.min(1, 0.25 + t));
+    }
+    if (e.inScope && e.lvl === 'ok') return out.copy(scopeColor(e.inScope)).lerp(C.cyan, Math.min(1, 0.25 + t));
     if (e.inferredOnly) return out.copy(C.inferred);
     if (e.lvl === 'critical') return out.copy(C.crit);
     if (e.lvl === 'warning') return out.copy(C.warn);
@@ -1672,7 +1777,60 @@ export class GalaxyScene {
     this.particleGeo.attributes.size.needsUpdate = true;
   }
 
+  // Labels never overlap. Names matter most, so they are placed first, in priority order: above the
+  // node, else below it, else the label steps aside (hover or zoom brings it back). Then each label
+  // that still has room gets its metrics line too. Runs with the label refresh, 5x/s.
+  _declutter(items) {
+    const w = this.container.clientWidth, h = this.container.clientHeight;
+    const v = this._lblV || (this._lblV = new THREE.Vector3());
+    const hit = (b, list, skip) => list.some((p) => p !== skip && b.x0 < p.x1 && b.x1 > p.x0 && b.y0 < p.y1 && b.y1 > p.y0);
+    // Plane, column, district and arm captions are fixed furniture: node labels keep clear of them.
+    const placed = [];
+    for (const el of this.labelRenderer.domElement.querySelectorAll('.lbl.layer, .lbl.district, .lbl.ns')) {
+      if (el.style.display === 'none' || el.style.opacity === '0') continue;
+      const r = el.getBoundingClientRect();
+      if (r.width && r.height) placed.push({ x0: r.left, x1: r.right, y0: r.top, y1: r.bottom });
+    }
+    const base = this.labelRenderer.domElement.getBoundingClientRect();
+    for (const p of placed) { p.x0 -= base.left; p.x1 -= base.left; p.y0 -= base.top; p.y1 -= base.top; }
+    items.sort((a, b) => b.prio - a.prio);
+    const shown = [];
+    const v2 = this._lblV2 || (this._lblV2 = new THREE.Vector3());
+    const city = this.wv.gibson > 0.5;                 // tower labels sit on the roof: there is no "below"
+    for (const it of items) {
+      const el = it.el;
+      v.setFromMatrixPosition(it.obj.label.matrixWorld).project(this.camera);
+      if (v.z > 1 || v.z < -1) { el.classList.add('hidden'); continue; }
+      // The label element is centred on its anchor, which floats just above the node.
+      const x = (v.x * 0.5 + 0.5) * w, y = (-v.y * 0.5 + 0.5) * h;
+      const ny = (-v2.copy(it.obj.pos).project(this.camera).y * 0.5 + 0.5) * h;
+      const nameEl = el.firstElementChild, meta = el.children[1];
+      const nw = (nameEl ? nameEl.offsetWidth : 60) || 60;
+      const pad = el.classList.contains('hidden') ? 7 : 2;      // a label that stepped aside needs clear room to return
+      const at = (cy) => ({ x0: x - nw / 2 - pad, x1: x + nw / 2 + pad, y0: cy - 8 - pad, y1: cy + 8 + pad });
+      const drop = Math.max(26, 2 * (ny - y));
+      const above = at(y), below = city ? null : at(y + drop);
+      const box = !hit(above, placed) ? above : below && !hit(below, placed) ? below : null;
+      el.classList.toggle('hidden', !box);
+      el.classList.add('compact');
+      el.style.marginTop = box && box === below ? `${Math.round(drop)}px` : '';
+      if (!box) continue;
+      placed.push(box);
+      if (meta && !it.compact && box === above) shown.push({ el, box, x, y, nw, mw: Math.max(nw, meta.textContent.trim().length * 5.6) });
+    }
+    for (const s of shown) {      // second pass: the metrics line, where nothing else needs the room
+      // With its metrics the label grows to two lines around the same centre: name up, metrics under it.
+      const name = { x0: s.x - s.nw / 2 - 2, x1: s.x + s.nw / 2 + 2, y0: s.y - 17, y1: s.y + 1 };
+      const line = { x0: s.x - s.mw / 2, x1: s.x + s.mw / 2, y0: s.y + 1, y1: s.y + 15 };
+      if (hit(name, placed, s.box) || hit(line, placed, s.box)) continue;
+      s.el.classList.remove('compact');
+      Object.assign(s.box, name);
+      placed.push(line);
+    }
+  }
+
   _updateLabels(W) {
+    const items = [];
     const hi = this.highlight;
     const many = this.nodes.size > 45;
     const camPos = this.camera.position;
@@ -1688,10 +1846,17 @@ export class GalaxyScene {
       if (this.occluders && this.occluders.has(n.id) && W.t > 0.5) show = false;   // faded out of the way
       const dim = hi && !hi.nodes.has(n.id);
       // Strata packs services on one ring: keep only names unless the node is in focus.
-      el.classList.toggle('compact', (W.s > 0.5 || W.t > 0.5) && this.nodes.size > 14 && !(hi && hi.nodes.has(n.id)) && n.kind !== 'host');
-      el.classList.toggle('hidden', !show);
+      const compact = (W.s > 0.5 || W.t > 0.5) && this.nodes.size > 14 && !(hi && hi.nodes.has(n.id)) && n.kind !== 'host';
       el.classList.toggle('dim', !!dim && show);
+      if (!show) { el.classList.add('hidden'); continue; }
+      // What must stay readable when labels collide: the selection, then trouble, then the landmarks.
+      const lvl = n.risk?.level;
+      const prio = (hi && hi.nodes.has(n.id) ? 100 : 0) + (lvl === 'critical' ? 60 : lvl === 'warning' ? 45 : 0)
+        + (n.kind === 'clients' ? (n.scope === 'lan' ? 40 : 58) : n.kind === 'entry' ? 30 : n.kind === 'workload' ? 20 + Math.min(10, n.pods.length)
+          : n.kind === 'host' ? 25 : n.kind === 'service' ? 20 : 12) - (n.ghost ? 15 : 0);
+      items.push({ obj, el, prio, compact });
     }
+    this._declutter(items);
     for (const child of this.decor.children) {
       if (child.userData.nsLabel) child.element.style.opacity = this.opts.labels ? String(Math.max(0, 1 - (1 - W.g) * 1.6) * (hi ? 0.3 : 0.9)) : '0';
     }
