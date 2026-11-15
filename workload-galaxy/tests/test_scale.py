@@ -113,3 +113,33 @@ def test_tables_detail_and_search_work_against_the_whole_estate():
     assert ix.detail("wl:nope/Deployment/x") is None
     hit = ix.search(page["rows"][0]["name"])[0]
     assert hit["name"] == page["rows"][0]["name"]
+
+
+def test_problems_only_draws_what_is_failing_with_its_neighbourhood():
+    g, cmap = view(focus=True)
+    v = g["view"]
+    assert v["focus"] and v["collapsed"] and 0 < v["focusShown"] <= v["focusTotal"] and len(g["nodes"]) <= v["budget"]
+    drawn = {n["id"]: n for n in g["nodes"]}
+    failing = [n for n in drawn.values() if n["kind"] == "workload" and not n.get("aggregate") and n["risk"]["level"] != "ok"]
+    assert len(failing) >= v["focusShown"] * 0.9
+    worst = max((n for n in BIG["nodes"] if n["kind"] == "workload" and not n.get("platform")), key=lambda n: n["risk"]["score"])
+    assert worst["id"] in drawn                                           # the worst problem is always on the map
+    for e in BIG["edges"]:                                                # ...with what calls it and what it calls
+        if worst["id"] in (e["source"], e["target"]):
+            other = e["target"] if e["source"] == worst["id"] else e["source"]
+            assert cmap.get(other) in drawn
+    # everything else is still accounted for, inside its unit
+    units = [n for n in g["nodes"] if n.get("aggregate") in ("unit", "project")]
+    individually = sum(1 for n in drawn.values() if n["kind"] == "workload" and not n.get("aggregate") and not n.get("ghost"))
+    assert sum(u["counts"]["workloads"] for u in units if not u["ghost"]) + individually == v["workloads"]
+    assert all(e.get("minor") for e in g["edges"] if e["source"].startswith("grp:") and e["target"].startswith("grp:"))
+
+
+def test_problems_only_works_on_a_small_cluster_too():
+    small = build()
+    g, _ = view(graph=small, focus=True)
+    names = {n["name"] for n in g["nodes"] if n["kind"] == "workload" and not n.get("aggregate")}
+    assert {"fraud-check", "search", "orders-db"} <= names                  # the failing ones, individually
+    assert "payments-api" in names                                          # a caller of fraud-check
+    assert any(n.get("aggregate") == "project" for n in g["nodes"])          # the healthy rest, rolled up
+    assert g["view"]["focusShown"] == g["view"]["focusTotal"]

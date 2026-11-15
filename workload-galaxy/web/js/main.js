@@ -31,6 +31,7 @@ const state = {
   detail: null,       // the selected node fetched from the server, when the page's rolled-up graph doesn't hold it
   // Units opened in place on a large estate: grp:<business unit>, ns:<project>; oldest first.
   expand: (params.get('expand') || '').split(',').filter(Boolean),
+  focus: params.has('focus') ? params.get('focus') === '1' : loadPref('focus', false),     // problems only
   graph: null,
   meta: null,
   allNamespaces: [],
@@ -55,6 +56,7 @@ const ui = new UI({
   onClear() { select(null); },
   onScenarios(ids) { applyScenarios(ids); },
   onExpand(token, open = true) { return setExpand(token, open); },
+  onFocus(on) { state.focus = on; savePref('focus', on); syncUrl(); return load(); },
   onReveal(sel) { setView(state.view === 'triage' ? state.mapView : state.view); return reveal(sel); },
   search(q) { return getJSON('api/v1/search?q=' + encodeURIComponent(q)); },
   async fetchLogs(ns, pod, container, previous) {
@@ -82,12 +84,13 @@ const triage = new Triage(document.getElementById('triage'), {
   scope() { return { namespaces: state.namespaces, platform: state.platform }; },
   fetchTable(kind, o) {
     const q = scopeQuery();
-    q.delete('expand');
+    q.delete('expand'); q.delete('focus');
     for (const [k, v] of Object.entries(o)) if (v !== '' && v != null) q.set(k, String(v));
     return getJSON(`api/v1/${kind}?${q}`);
   },
   async fetchPattern(key) {
     const q = scopeQuery();
+    q.delete('focus');
     q.set('pattern', key);
     return { key, ...(await getJSON(`api/v1/triage?${q}`)) };
   },
@@ -117,6 +120,7 @@ function scopeQuery() {
   if (state.namespaces && state.namespaces.length) q.set('ns', state.namespaces.join(','));
   if (state.platform) q.set('platform', 'true');
   if (state.expand.length) q.set('expand', state.expand.join(','));
+  if (state.focus) q.set('focus', 'true');
   return q;
 }
 
@@ -326,6 +330,7 @@ function syncUrl() {
   if (state.view !== 'galaxy') q.set('view', state.view); else q.delete('view');
   if (state.selection && state.selection.type === 'node') q.set('select', state.selection.id); else q.delete('select');
   if (state.expand.length) q.set('expand', state.expand.join(',')); else q.delete('expand');
+  if (state.focus) q.set('focus', '1'); else q.delete('focus');
   if (state.scenarios && state.scenarios.active.length) q.set('scenario', state.scenarios.active.join(',')); else q.delete('scenario');
   const s = q.toString();
   history.replaceState(null, '', location.pathname + (s ? '?' + s : ''));
@@ -351,6 +356,7 @@ window.addEventListener('message', (ev) => {
   else if (m.command === 'setNamespaces') ui.ctx.onNamespaces(m.namespaces ?? null, !!m.platform);
 });
 
+document.getElementById('tFocus').checked = state.focus;
 applyView(state.view);
 load();
 (function poll() {

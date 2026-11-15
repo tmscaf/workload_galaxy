@@ -144,7 +144,14 @@ trouble); healthy low-traffic bundles are drawn only for the unit you select.
   stays rolled up. The rail lists what is open and closes it again.
 - At most `GALAXY_NODE_BUDGET` (320) things are ever drawn; when you open more, the
   oldest expansion closes, and the rail says so.
+- **Problems only** (bottom bar, any cluster size) draws just what is failing, worst
+  first, each with what calls it and what it depends on, and rolls everything healthy
+  up into its project or unit. On a large estate it shows as many as stay readable
+  (about 140 things) and says how many more there are.
 - Healthy nodes group by zone; a node with a problem is always shown on its own.
+- A workload with hundreds of pods (a DaemonSet on every node) is still one star and
+  one tower: the worst 36 pods / 18 floors are drawn, the rest are counted.
+- In Cascade, a hop with more than 12 members wraps into side-by-side lanes.
 - Scoping to one project with the Projects filter shows it in full detail, as before.
 - Search, the detail drawer and *Show on map* reach every workload through the
   server, whether or not it is on the page.
@@ -401,7 +408,7 @@ All paths are relative, so the service works behind a path prefix (mount it at
 |---|---|
 | `GET /api/v1/meta` | version, mode, which data sources are live, last error |
 | `GET /api/v1/namespaces` | per namespace: workloads, pods, warning/critical counts, `platform` flag |
-| `GET /api/v1/topology?ns=a,b&platform=true&expand=grp:retail,ns:retail-web` | the graph for one screen: `nodes`, `edges`, `hotspots`, `paths`, `cascades`, `sources`, plus `view` (zoom level, what is expanded) and the findings summary. Large estates come back rolled up; `expand` opens units in place, `level=workloads|projects|units` forces a level |
+| `GET /api/v1/topology?ns=a,b&platform=true&expand=grp:retail,ns:retail-web` | the graph for one screen: `nodes`, `edges`, `hotspots`, `paths`, `cascades`, `sources`, plus `view` (zoom level, what is expanded) and the findings summary. Large estates come back rolled up; `expand` opens units in place, `level=workloads|projects|units` forces a level, `focus=true` is problems only |
 | `GET /api/v1/node?id=…` | one workload, host or call from the full graph with its neighbours, calls and findings; `at` is the id it is drawn as in the caller's view |
 | `GET /api/v1/workloads` · `/api/v1/calls` | table rows, with `ns`, `q`, `sort`, `desc`, `offset`, `limit`, `problems` |
 | `GET /api/v1/search?q=…` | workloads, pods, hosts and projects by name |
@@ -420,7 +427,7 @@ With `ns` set, neighbours outside the selection are included with
 <iframe src="https://galaxy.example/?embed=1&ns=payments&view=strata"></iframe>
 ```
 
-URL params: `ns`, `platform=1`, `view=triage|galaxy|strata|cascade|gibson`, `select=<node id>`,
+URL params: `ns`, `platform=1`, `focus=1` (problems only), `expand=grp:<unit>,ns:<project>`, `view=triage|galaxy|strata|cascade|gibson`, `select=<node id>`,
 `embed=1` (compact chrome), `rail=0` (hide left rail), `api=<collector base URL>`.
 
 Messages out (`event.data.source === 'workload-galaxy'`): `{type:'ready'}`,

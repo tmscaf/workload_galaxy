@@ -1,6 +1,6 @@
 // Deterministic layouts for both views. Same input -> same positions, so
 // live refreshes only move what actually changed.
-import { hash01 } from './format.js';
+import { hash01, visiblePods } from './format.js';
 
 export const GALAXY = { R1: 48, RS: 32, TWIST: 0.34, MIN_ARC: 15 };
 export const STRATA = { users: 100, services: 36, pods: -24, hosts: -80 };
@@ -37,12 +37,16 @@ export function computeDepth(nodes, edges) {
   return { depth, out };
 }
 
+// What a node is grouped with (a spiral arm, a city district). On a rolled-up estate that is its
+// business unit, so a unit and whatever of it is drawn in detail sit together.
+let groupByUnit = false;
 function groupKey(n) {
   if (n.kind === 'external') return '~external';
-  return n.namespace || '~cluster';
+  return (groupByUnit && n.group) || n.namespace || '~cluster';
 }
 
 export function computeLayouts(graph) {
+  groupByUnit = !!graph.view?.collapsed;
   const nodes = graph.nodes.filter((n) => n.kind !== 'host');
   const hosts = graph.nodes.filter((n) => n.kind === 'host');
   const { depth } = computeDepth(nodes, graph.edges);
@@ -53,7 +57,8 @@ export function computeLayouts(graph) {
   for (const n of nodes) if (n.kind !== 'external') maxDepth = Math.max(maxDepth, depth.get(n.id) || 1);
   // Rolled-up units are big stars with their members in orbit: give them wider orbits.
   const G = graph.view?.collapsed ? { ...GALAXY, R1: 92, RS: 58, MIN_ARC: 34 } : GALAXY;
-  const ringR = (d) => (d <= 0 ? 0 : G.R1 + (d - 1) * G.RS);
+  // ...and deep call chains inside an opened project are packed closer, so they don't fling the map wide.
+  const ringR = (d) => (d <= 0 ? 0 : G.R1 + G.RS * (graph.view?.collapsed ? Math.min(d - 1, 2) + 0.45 * Math.max(0, d - 3) : d - 1));
 
   // ---------------- galaxy: namespaces are spiral arms, depth is the orbit
   const groups = new Map();
@@ -112,7 +117,7 @@ export function computeLayouts(graph) {
       });
     }
     const ns = members[0];
-    arms.push({ key: k, namespace: ns.namespace, platform: !!ns.platform, a0, a1, dMax, count: members.length });
+    arms.push({ key: k, namespace: groupByUnit ? k : ns.namespace, platform: !!ns.platform, a0, a1, dMax, count: members.length });
   });
 
   // External dependencies sit past the outermost orbit, near whoever calls them.
@@ -189,9 +194,10 @@ export function computeLayouts(graph) {
   for (const n of ring) {
     if (n.kind !== 'workload') continue;
     const c = strata.get(n.id);
-    const cnt = n.pods.length;
+    const shown = visiblePods(n);
+    const cnt = shown.length;
     const cr = 2.8 * Math.sqrt(cnt);
-    n.pods.forEach((p, i) => {
+    shown.forEach((p, i) => {
       const rr = cnt === 1 ? 0 : cr * Math.sqrt((i + 0.5) / cnt);
       const ang = i * 2.39996;
       podSlots.set(podKey(n.id, p.name), { x: c.x * 0.8 + Math.cos(ang) * rr, y: STRATA.pods, z: c.z * 0.8 + Math.sin(ang) * rr });
@@ -249,7 +255,7 @@ function cityLayout(nodes, hosts, edges, depth, gkeys) {
       || a.name.localeCompare(b.name));
     const cols = Math.max(1, Math.ceil(Math.sqrt(list.length * 1.4)));
     const rows = Math.ceil(list.length / cols);
-    return { key, list, cols, rows, platform: !!list[0].platform, namespace: list[0].namespace };
+    return { key, list, cols, rows, platform: !!list[0].platform, namespace: groupByUnit ? key : list[0].namespace };
   });
   const order = new Map(gkeys.map((k, i) => [k, i]));
   blocks.sort((a, b) => (a.platform ? 1 : 0) - (b.platform ? 1 : 0) || (order.get(a.key) ?? 99) - (order.get(b.key) ?? 99));
@@ -397,9 +403,14 @@ function cascadeLayout(nodes, hosts, depth, preds, maxDepth) {
   let maxH = 0;
   // Columns past the last hop (your network, the internet, infrastructure) hold long hostnames:
   // give them wider gutters so their labels don't run into the neighbouring column's.
+  // A busy hop wraps into side-by-side lanes of at most ROWS, so a column never outgrows the screen.
+  const ROWS = 12, LANE = CASCADE.DX * 0.9;
+  const lanes = ts.map((t) => Math.ceil(cols.get(t).length / ROWS));
   const xs = [];
-  ts.forEach((t, ci) => { xs.push(ci === 0 ? 0 : xs[ci - 1] + (t > maxDepth ? CASCADE.DX * 1.7 : CASCADE.DX)); });
-  const span = xs[xs.length - 1] || 0;
+  ts.forEach((t, ci) => {
+    xs.push(ci === 0 ? 0 : xs[ci - 1] + (lanes[ci - 1] - 1) * LANE + (t > maxDepth ? CASCADE.DX * 1.7 : CASCADE.DX));
+  });
+  const span = (xs[xs.length - 1] || 0) + (lanes[lanes.length - 1] - 1) * LANE;
   ts.forEach((t, ci) => {
     const list = cols.get(t);
     // Order each column by where its callers sit, so the waterfall's lines cross less.
@@ -410,16 +421,23 @@ function cascadeLayout(nodes, hosts, depth, preds, maxDepth) {
     };
     if (t === hostCol) list.sort((a, b) => (a.pseudo ? 1 : 0) - (b.pseudo ? 1 : 0) || a.name.localeCompare(b.name));
     else list.sort((a, b) => bary(b) - bary(a) || (a.namespace || '').localeCompare(b.namespace || '') || a.name.localeCompare(b.name));
-    const x = xs[ci] - span / 2;
+    const x0 = xs[ci] - span / 2;
     const base = -(ci - T / 2) * CASCADE.STEP_Y;
     const z = -(ci - T / 2) * CASCADE.STEP_Z;
     const dy = t === hostCol ? CASCADE.DY * 1.25 : CASCADE.DY;
-    list.forEach((n, i) => cascade.set(n.id, { x, y: base + ((list.length - 1) / 2 - i) * dy, z }));
-    const h = Math.max(1, list.length - 1) * dy;
+    const rows = Math.ceil(list.length / lanes[ci]);
+    list.forEach((n, i) => {
+      const lane = Math.floor(i / rows), row = i % rows;
+      // Alternate lanes sit half a row lower, so names in neighbouring lanes don't line up.
+      cascade.set(n.id, { x: x0 + lane * LANE, y: base + ((rows - 1) / 2 - row) * dy - (lane % 2) * dy * 0.5, z });
+    });
+    const width = (lanes[ci] - 1) * LANE;
+    const x = x0 + width / 2;
+    const h = Math.max(1, rows - 1) * dy + (lanes[ci] > 1 ? dy * 0.5 : 0);
     maxH = Math.max(maxH, h);
     const allExt = list.every((n) => n.kind === 'external');
     const kind = t === 0 ? 'users' : t === hostCol ? 'hosts' : allExt && t === maxDepth + 1 ? 'lan' : allExt && t === maxDepth + 2 ? 'internet' : 'hop';
-    columns.push({ t, kind, x, z, y: base, top: base + h / 2, bottom: base - h / 2, count: list.length,
+    columns.push({ t, kind, x, z, y: base, width, top: base + h / 2, bottom: base - h / 2 - (lanes[ci] > 1 ? dy * 0.25 : 0), count: list.length,
       label: kind === 'users' ? 'End users' : kind === 'hosts' ? 'Infrastructure' : kind === 'lan' ? 'Your network (LAN)' : kind === 'internet' ? 'Internet' : `Hop ${t}`,
       ids: list.map((n) => n.id) });
   });

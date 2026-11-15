@@ -4,6 +4,17 @@ The version lives in [`VERSION`](VERSION). Every deploy adds a UTC build stamp
 (`0.3.0-20261111.2318`), shown in the UI's version chip, `/api/v1/version`, the
 image tag and the `app.kubernetes.io/version` label in Rancher.
 
+## 0.10.0
+- **Problems only** (Topology, bottom bar): draws what is failing, worst first, each with what
+  calls it and what it depends on; everything healthy is rolled up into its project or unit.
+  Works at any cluster size; `focus=1` in the URL, `focus=true` on `/api/v1/topology`.
+- On a rolled-up estate the map groups by business unit (arms, districts), so a unit and the
+  parts of it drawn in detail sit together.
+- A workload with hundreds of pods no longer becomes a giant star or a tower through the roof:
+  at most 36 pods / 18 floors are drawn (the worst ones); the drawer lists the worst 60.
+- Cascade wraps a busy hop into lanes of 12 instead of running off the screen.
+- Deep call chains inside an opened project are packed closer in Galaxy.
+
 ## 0.9.0
 - **Scales to enterprise estates** (verified on a simulated 606 projects / 11,451 workloads /
   27,341 pods / 394 nodes) while small clusters look exactly as before.

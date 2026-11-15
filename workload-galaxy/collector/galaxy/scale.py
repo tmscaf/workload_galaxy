@@ -50,8 +50,11 @@ def _state(n: dict) -> str:
 
 
 def collapse(graph: dict, *, expand: list[str] | None = None, level: str = "auto", detail_limit: int = 150,
-             project_limit: int = 60, budget: int = 320) -> tuple[dict, dict[str, str]]:
-    """-> (graph to serve, {real node id: id it is drawn as})."""
+             project_limit: int = 60, budget: int = 320, focus: bool = False) -> tuple[dict, dict[str, str]]:
+    """-> (graph to serve, {real node id: id it is drawn as}).
+
+    `focus`: problems only. What is failing is drawn individually together with what calls it and what
+    it depends on; everything else is rolled up, whatever the size of the cluster."""
     nodes = graph["nodes"]
     real = [n for n in nodes if n["kind"] in ("workload", "entry", "service") and n.get("namespace")]
     workloads = [n for n in real if n["kind"] == "workload" and not n.get("ghost")]
@@ -59,9 +62,9 @@ def collapse(graph: dict, *, expand: list[str] | None = None, level: str = "auto
     group_of = {n["namespace"]: n.get("group") or n["namespace"] for n in real}
     groups = sorted(set(group_of.values()))
     view = {"level": "workloads", "collapsed": False, "workloads": len(workloads), "projects": len(projects),
-            "units": len(groups), "expanded": [], "dropped": [], "budget": budget}
+            "units": len(groups), "expanded": [], "dropped": [], "budget": budget, "focus": False}
     same = {n["id"]: n["id"] for n in nodes}
-    if level == "workloads" or (level == "auto" and len(workloads) <= detail_limit):
+    if not focus and (level == "workloads" or (level == "auto" and len(workloads) <= detail_limit)):
         for f in graph.get("findings", []) + [x for p in graph.get("patterns", []) for x in p["examples"]]:
             f["at"] = f["subject"]
         return {**graph, "view": {**view, "shown": len(nodes)}}, same
@@ -85,16 +88,44 @@ def collapse(graph: dict, *, expand: list[str] | None = None, level: str = "auto
                 shown += 1
         return open_groups, open_ns, shown
 
+    # Problems-only: the worst failing things first, each with its direct callers and dependencies,
+    # for as many as one screen can hold. The rest stay inside their unit, which still counts them.
+    detail: set[str] = set()
+    if focus:
+        by_id = {n["id"]: n for n in real}
+        near: dict[str, list[tuple[float, str]]] = defaultdict(list)
+        for e in graph["edges"]:
+            w = e["risk"]["score"] + (e["traffic"].get("level") or 0) * 0.1
+            # Real calls only: a link merely inferred from config (every pod's telemetry endpoint, say)
+            # would pull shared infrastructure into every neighbourhood.
+            seen = e["risk"]["level"] != "ok" or any(x in e["evidence"] for x in ("observed", "mesh", "declared"))
+            if seen and e["source"] in by_id and e["target"] in by_id:
+                near[e["source"]].append((w, e["target"]))
+                near[e["target"]].append((w, e["source"]))
+        failing = sorted((n for n in real if n["risk"]["level"] != "ok" and not n.get("ghost")),
+                         key=lambda n: (-LEVEL_RANK[n["risk"]["level"]], -n["risk"]["score"], n["id"]))
+        room = max(30, min(140, budget - len(groups) - 70))      # more than this stops being readable
+        shown_problems = 0
+        for n in failing:
+            add = {n["id"]} | {x for _w, x in sorted(near[n["id"]], reverse=True)[:6]}
+            if len(detail | add) > room:
+                break
+            detail |= add
+            shown_problems += 1
+        view.update(focus=True, focusShown=shown_problems, focusTotal=len(failing),
+                    focusRest=len(workloads) - sum(1 for n in workloads if n["id"] in detail))
+        ns_count = Counter(n["namespace"] for n in real if n["id"] not in detail)
+
     other = len(nodes) - len(real)
     dropped: list[str] = []
     open_groups, open_ns, shown = plan(expand)
-    while expand and shown + min(other, MAX_HOSTS + 30) > budget:     # oldest expansion gives way first
+    while expand and shown + len(detail) + min(other, MAX_HOSTS + 30) > budget:     # oldest expansion gives way first
         dropped.append(expand.pop(0))
         open_groups, open_ns, shown = plan(expand)
 
     def container(n: dict) -> str:
         ns = n["namespace"]
-        if ns in open_ns:
+        if ns in open_ns or n["id"] in detail:
             return n["id"]
         g = group_of[ns]
         if base == "projects" or g in open_groups or any(x in open_ns for x in group_projects[g]):
@@ -127,6 +158,10 @@ def collapse(graph: dict, *, expand: list[str] | None = None, level: str = "auto
     out_nodes += hosts
 
     edges, emap = _merge_edges(graph["edges"], cmap, {n["id"]: n for n in out_nodes})
+    if focus:      # the lines that matter are the ones touching a problem; unit-to-unit bundles wait for a click
+        for e in edges:
+            if e["source"].startswith(("proj:", "grp:")) and e["target"].startswith(("proj:", "grp:")):
+                e["minor"] = True
     visible = {n["id"] for n in out_nodes} | {e["id"] for e in edges}
     examples = [x for p in graph.get("patterns", []) for x in p["examples"]]
     for f in findings + examples:
@@ -206,7 +241,8 @@ def _aggregate(cid: str, ms: list[dict], cmap: dict[str, str], top_finding: dict
         "group": group_of.get(ns0, ns0), "platform": all(m.get("platform") for m in ms),
         "ghost": all(m.get("ghost") for m in ms),
         "replicas": {"desired": len(wls), "ready": states["healthy"], "current": len(wls)},
-        "counts": {"projects": len({m["namespace"] for m in ms}), "workloads": len(wls), "healthy": states["healthy"],
+        "counts": {"projects": len({m["namespace"] for m in ms}), "workloads": len(wls), "members": len(ms),
+                   "healthy": states["healthy"],
                    "degraded": states["degraded"], "down": states["down"], "failing": failing,
                    "pods": sum(len(m.get("pods") or []) for m in wls)},
         "pods": pods, "children": children[:MAX_CHILDREN], "childrenTotal": len(children),

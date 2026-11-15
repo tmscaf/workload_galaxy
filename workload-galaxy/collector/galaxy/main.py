@@ -56,7 +56,8 @@ app = FastAPI(title="Workload Galaxy", version=__version__, lifespan=lifespan,
 app.add_middleware(GZipMiddleware, minimum_size=2048)      # JSON compresses ~10x; large estates need it
 
 
-def _view(ns: str | None, platform: bool, expand: str | None = None, level: str = "auto", pattern: str | None = None):
+def _view(ns: str | None, platform: bool, expand: str | None = None, level: str = "auto", pattern: str | None = None,
+          focus: bool = False):
     """-> (graph for one screen, {real node id: id it is drawn as}); cached per refresh."""
     _graph_or_503()
     names = tuple(_ns(ns) or ())
@@ -66,11 +67,11 @@ def _view(ns: str | None, platform: bool, expand: str | None = None, level: str 
         full = _graph_or_503()
         graph, cmap = collapse(filter_graph(full, list(names) or None, platform, pattern), expand=list(exp), level=level,
                                detail_limit=settings.detail_limit, project_limit=settings.project_limit,
-                               budget=settings.node_budget)
+                               budget=settings.node_budget, focus=focus)
         graph.pop("_scoped", None)
         return graph, cmap
 
-    return state.view((names, platform, exp, level, pattern), build)
+    return state.view((names, platform, exp, level, pattern, focus), build)
 
 
 def _graph_or_503() -> dict:
@@ -126,20 +127,22 @@ def namespaces():
 def topology(ns: str | None = Query(None, description="comma-separated namespaces/projects"),
              platform: bool = Query(False, description="include platform namespaces (kube-*, openshift-*, cattle-*)"),
              expand: str | None = Query(None, description="units shown in detail: grp:<unit>,ns:<project>, oldest first"),
-             level: str = Query("auto", description="auto | workloads | projects | units")):
+             level: str = Query("auto", description="auto | workloads | projects | units"),
+             focus: bool = Query(False, description="problems only: failing workloads with their callers and "
+                                                    "dependencies in detail, everything else rolled up")):
     """The graph for one screen. Large estates come back rolled up by project or business unit
     (`view` says how); `expand` opens units in place. Small ones are returned in full."""
-    return _view(ns, platform, expand, level)[0]
+    return _view(ns, platform, expand, level, focus=focus)[0]
 
 
 @app.get("/api/v1/node")
-def node(id: str, ns: str | None = None, platform: bool = False, expand: str | None = None):
+def node(id: str, ns: str | None = None, platform: bool = False, expand: str | None = None, focus: bool = False):
     """One workload, host or call from the full graph, with its neighbours, calls and findings, plus
     `at`: the id it is drawn as in the view the caller is looking at."""
     detail = state.index().detail(id) if _graph_or_503() else None
     if not detail:
         raise HTTPException(404, detail="unknown node")
-    cmap = _view(ns, platform, expand)[1]
+    cmap = _view(ns, platform, expand, focus=focus)[1]
     src, _, dst = id.partition("->")
     at = cmap.get(id) or (f"{cmap.get(src)}->{cmap.get(dst)}" if dst and cmap.get(src) != cmap.get(dst) else cmap.get(src))
     return {**detail, "at": at}

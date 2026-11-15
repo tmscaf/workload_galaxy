@@ -7,7 +7,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import * as TX from './textures.js';
-import { edgeMetric, esc, fmtAge, fmtBytes, fmtCpu, fmtMs, hash01, nsColor, nodeMetric, podLevel } from './format.js';
+import { edgeMetric, esc, fmtAge, fmtBytes, fmtCpu, fmtMs, hash01, nsColor, nodeMetric, podLevel, visiblePods } from './format.js';
 import { computeLayouts, podKey, CASCADE, CITY } from './layout.js';
 
 const C = {
@@ -309,13 +309,14 @@ export class GalaxyScene {
     this.pods = [];
     for (const n of graph.nodes) {
       if (n.kind !== 'workload') continue;
-      n.pods.forEach((p, i) => {
+      const shownPods = visiblePods(n);
+      shownPods.forEach((p, i) => {
         const key = podKey(n.id, p.name);
         const slot = L.podSlots.get(key) || L.strata.get(n.id);
         const prev = oldPods.get(key);
         const st = prev ? prev.str : new THREE.Vector3(slot.x, slot.y, slot.z);
         this.pods.push({
-          key, wid: n.id, data: p, i, count: n.pods.length, str: st,
+          key, wid: n.id, data: p, i, count: shownPods.length, str: st,
           strTarget: new THREE.Vector3(slot.x, slot.y, slot.z), level: podLevel(p),
           incl: (hash01(key) - 0.5) * 1.2, phase: hash01(key + 'p') * Math.PI * 2,
           speed: 0.25 + hash01(key + 's') * 0.25, pos: new THREE.Vector3(),
@@ -354,7 +355,7 @@ export class GalaxyScene {
     this._applyHighlight();
     this.positionsDirty = true;
     // Opening or closing a unit changes the size of the map: frame the new one.
-    const zoomKey = `${graph.view?.level || ''}|${(graph.view?.expanded || []).join(',')}`;
+    const zoomKey = `${graph.view?.level || ''}|${graph.view?.focus ? 'focus' : ''}|${(graph.view?.expanded || []).join(',')}`;
     if (first) this.resetCamera(true);
     else if (zoomKey !== this._zoomKey) this.resetCamera(false);
     this._zoomKey = zoomKey;
@@ -425,7 +426,7 @@ export class GalaxyScene {
       const base = new THREE.Color(nsColor(n.namespace, n.platform));
       color = lvlColor ? lvlColor.clone() : base.lerp(C.white, 0.35);
       if (n.idle) color = C.idle.clone();
-      size = 9 + 4.2 * Math.sqrt(Math.max(1, n.pods.length));
+      size = 9 + 4.2 * Math.sqrt(Math.max(1, Math.min(36, n.pods.length)));
       // A whole project or business unit: bigger with what it holds (log scale: 10 vs 1,000 workloads).
       if (n.aggregate) size = 12 + 2.6 * Math.log2(1 + n.counts.workloads);
     } else if (n.kind === 'clients') {   // users on your network: smaller and green, like the rest of your LAN
@@ -471,7 +472,8 @@ export class GalaxyScene {
     const ro = n.rollout && { progressing: 'rolling out', stuck: 'rollout stuck', failed: 'rollout failed' }[n.rollout.state];
     const k = n.counts;
     const metric = n.aggregate && n.kind !== 'host'
-      ? [n.aggregate === 'unit' ? `${k.projects} projects` : '', `${k.workloads} workload${k.workloads === 1 ? '' : 's'}`, k.failing ? `${k.failing} failing` : 'all healthy'].filter(Boolean).join(' · ')
+      ? (k.workloads ? [n.aggregate === 'unit' ? `${k.projects} projects` : '', `${k.workloads} workload${k.workloads === 1 ? '' : 's'}`, k.failing ? `${k.failing} failing` : 'all healthy'].filter(Boolean).join(' · ')
+        : `${k.members} route${k.members === 1 ? '' : 's'} / service${k.members === 1 ? '' : 's'}`)
       : n.kind !== 'host' ? [ro, nodeMetric(n, this.inbound.get(n.id))].filter(Boolean).join(' · ')
       : n.pseudo ? `${n.podCount} pod${n.podCount === 1 ? '' : 's'} waiting for a node`
       : [`${n.podCount} pods`, n.memRequestRatio != null ? `mem ${Math.round(n.memRequestRatio * 100)}% reserved` : '',
@@ -658,7 +660,7 @@ export class GalaxyScene {
     this.columnObjs = [];
     for (const col of this.layout.columns) {
       const color = new THREE.Color(COLUMN_COLOR[col.kind]);
-      const w = CASCADE.DX * 0.64;
+      const w = CASCADE.DX * 0.64 + (col.width || 0);
       const h = col.top - col.bottom + CASCADE.DY * 1.7 + (col.kind === 'hosts' ? 14 : 0);
       const pane = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({
         color, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));
@@ -841,8 +843,9 @@ export class GalaxyScene {
     grp.position.set(p.x, 0, p.z);
     const rank = { ok: 0, warning: 1, critical: 2 };
     // Floors = running pods; problems on the top floors, where they're seen first.
-    const live = n.pods.filter((pd) => podLevel(pd) !== 'evicted' && !(pd.phase === 'Pending' && !pd.node))
-      .sort((a, b) => rank[podLevel(a)] - rank[podLevel(b)]);
+    // At most 18 floors: a tower stays a tower however many pods it has (the worst ones are kept).
+    const live = visiblePods(n, 60).filter((pd) => podLevel(pd) !== 'evicted' && !(pd.phase === 'Pending' && !pd.node))
+      .sort((a, b) => rank[podLevel(a)] - rank[podLevel(b)]).slice(-18);
     const height = PLINTH + live.length * FLOOR;
     // The plinth: dark glass base carrying the name; clicking it selects the workload.
     const plinth = new THREE.Mesh(new THREE.BoxGeometry(TOWER, PLINTH * 0.94, TOWER), fillMat('#0e3140', live.length ? 0.6 : 0.35, n.id));

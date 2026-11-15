@@ -1,5 +1,5 @@
 // DOM panels around the 3D view.
-import { esc, fmtAge, fmtBytes, fmtCpu, fmtMs, fmtNum, fmtPct, edgeMetric, LEVEL_COLOR, nsColor, podLevel } from './format.js';
+import { esc, fmtAge, fmtBytes, fmtCpu, fmtMs, fmtNum, fmtPct, edgeMetric, LEVEL_COLOR, nsColor, podLevel, visiblePods } from './format.js';
 
 const $ = (sel) => document.querySelector(sel);
 const KIND_LABEL = { workload: null, entry: null, external: 'External dependency', clients: 'Outside the cluster',
@@ -68,6 +68,7 @@ export class UI {
     for (const [id, key] of Object.entries(map)) {
       $('#' + id).addEventListener('change', (ev) => this.ctx.onOptions({ [key]: ev.target.checked }));
     }
+    $('#tFocus').addEventListener('change', (ev) => this.ctx.onFocus(ev.target.checked));
   }
 
   // ------------------------------------------------------------------ scenarios (demo mode)
@@ -289,8 +290,10 @@ export class UI {
     scale.hidden = !(v && v.collapsed);
     if (v && v.collapsed) {
       const unit = v.level === 'units' ? `${v.units} business units` : `${v.projects} projects`;
-      scale.innerHTML = `<h2>Zoom level</h2>
-        <div class="sc-txt"><b>${fmtNum(v.workloads)}</b> workloads in <b>${v.projects}</b> projects, drawn as <b>${unit}</b>. Double-click one to open it.</div>
+      scale.innerHTML = `<h2>${v.focus ? 'Problems only' : 'Zoom level'}</h2>
+        ${v.focus ? `<div class="sc-txt">${v.focusTotal ? `<b>${v.focusShown}</b>${v.focusShown < v.focusTotal ? ` worst of <b>${fmtNum(v.focusTotal)}</b>` : ''} failing workload${v.focusTotal === 1 ? '' : 's'}, each with what calls it and what it depends on.` : '<b>Nothing is failing.</b>'}
+          The other ${fmtNum(v.focusRest)} workloads are rolled up into ${unit}.${v.focusShown < v.focusTotal ? ' Scope to a project or unit to see the rest.' : ''}</div>`
+    : `<div class="sc-txt"><b>${fmtNum(v.workloads)}</b> workloads in <b>${v.projects}</b> projects, drawn as <b>${unit}</b>. Double-click one to open it.</div>`}
         ${v.expanded.length ? `<div class="sc-open">${v.expanded.map((x) => `<button class="chip" data-close="${esc(x)}" title="Close">${esc(x.replace(/^(grp|ns):/, ''))} ✕</button>`).join('')}
           <button class="link" data-close="*">Close all</button></div>` : ''}
         ${v.dropped.length ? `<div class="sc-txt warn">Closed ${v.dropped.map((x) => esc(x.replace(/^(grp|ns):/, ''))).join(', ')} to keep the map readable (${v.budget} things at once).</div>` : ''}`;
@@ -697,14 +700,14 @@ export class UI {
     html += `<div class="d-sec"><h3>Downstream · what it calls (${outbound.length})</h3>${this._peers(outbound, byId, 'down')}</div>`;
     if (n.kind === 'workload' && n.pods.length) {
       html += `<div class="d-sec"><h3>Pods (${n.pods.length}) <span style="text-transform:none;letter-spacing:0;font-weight:450;color:var(--faint)">· click one for its containers</span></h3><table class="pods"><tr><th>Pod</th><th>Node</th><th>CPU</th><th>Mem</th><th>↻</th><th>Age</th></tr>
-        ${n.pods.map((p) => {
+        ${visiblePods(n, 60).map((p) => {
           const lvl = podLevel(p);
           return `<tr data-pod="${esc(n.id)}#${esc(p.name)}" ${p.name === podName ? 'style="background:rgba(79,209,255,0.08)"' : ''}>
           <td class="nm" title="${esc(p.name)}${p.reason ? ' · ' + esc(p.reason) : ''}"><span class="st" style="background:${LEVEL_COLOR[lvl]}"></span>${esc(p.name)}</td>
           <td>${p.node ? esc(p.node) : '<span style="color:var(--crit)">none</span>'}</td><td>${p.cpu != null ? fmtCpu(p.cpu) : '–'}</td><td>${p.mem != null ? fmtBytes(p.mem) : '–'}</td>
           <td>${p.restarts}</td><td>${fmtAge(p.ageSeconds)}</td></tr>
           ${(p.issues || []).length ? `<tr data-pod="${esc(n.id)}#${esc(p.name)}"><td colspan="6" class="issue ${lvl}" style="border-top:0;padding-top:0">${esc(p.issues.join(' · '))}</td></tr>` : ''}`;
-        }).join('')}</table></div>`;
+        }).join('')}</table>${n.pods.length > 60 ? `<div class="d-sub" style="margin-top:6px">Showing the 60 worst of ${n.pods.length} pods.</div>` : ''}</div>`;
     }
     return html;
   }

@@ -461,3 +461,5 @@ body.drawer-open .tg-side { position: static; }
 .tg-more { margin: 6px 0 4px; } .tg-note, .tg-count { color: var(--faint); font-size: 11.5px; margin: 6px 0; }
 .tg-back { display: flex; gap: 12px; align-items: baseline; margin-bottom: 10px; } .tg-back .link { cursor: pointer; color: var(--cyan); }
 @media (max-width: 1180px) { .tg-projects.estate { grid-template-columns: 1fr; } }
+.focus-toggle { color: var(--text); font-weight: 600; padding-right: 10px; margin-right: 2px; border-right: 1px solid var(--line); }
+.focus-toggle input { accent-color: var(--crit) !important; }

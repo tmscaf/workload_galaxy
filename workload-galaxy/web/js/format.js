@@ -106,3 +106,11 @@ export function podLevel(p) {
   if (!p.ready || p.recentRestarts > 0 || p.phase !== 'Running') return 'warning';
   return 'ok';
 }
+
+// The pods of a workload that are drawn. A DaemonSet on 400 nodes or a 300-replica Deployment is
+// still one star / one tower: the worst pods are shown, the rest are counted in the label and drawer.
+export function visiblePods(n, max = 36) {
+  if (!n.pods || n.pods.length <= max) return n.pods || [];
+  const rank = { critical: 0, warning: 1, evicted: 2, ok: 3 };
+  return [...n.pods].sort((a, b) => (rank[podLevel(a)] ?? 3) - (rank[podLevel(b)] ?? 3)).slice(0, max);
+}
