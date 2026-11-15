@@ -51,6 +51,11 @@ class Settings:
     internal_cidrs: list[str] = field(default_factory=list)
     event_window_seconds: int = 3600
     pod_logs: bool = False
+    group_by: str = "prefix"
+    group_separator: str = "-"
+    detail_limit: int = 150
+    project_limit: int = 60
+    node_budget: int = 320
     web_root: str = ""
     log_level: str = "INFO"
 
@@ -83,6 +88,15 @@ def load_settings() -> Settings:
         event_window_seconds=max(300, _int("GALAXY_EVENT_WINDOW_SECONDS", 3600)),
         # Off by default: serving log tails widens what the dashboard can reveal (needs pods/log RBAC).
         pod_logs=_bool("GALAXY_POD_LOGS", False),
+        # How projects roll up into business units on large clusters: "prefix" (the part of the
+        # namespace name before the separator), "label:<key>" (a namespace label) or "none".
+        group_by=os.environ.get("GALAXY_GROUP_BY", "prefix").strip() or "prefix",
+        group_separator=os.environ.get("GALAXY_GROUP_SEPARATOR", "-") or "-",
+        # Above this many workloads in view the topology shows projects, above project_limit projects
+        # it shows business units; node_budget caps what is ever drawn at once.
+        detail_limit=max(20, _int("GALAXY_DETAIL_LIMIT", 150)),
+        project_limit=max(10, _int("GALAXY_PROJECT_LIMIT", 60)),
+        node_budget=max(100, _int("GALAXY_NODE_BUDGET", 320)),
         web_root=os.environ.get("GALAXY_WEB_ROOT", default_web),
         log_level=os.environ.get("GALAXY_LOG_LEVEL", "INFO").upper(),
     )

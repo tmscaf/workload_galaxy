@@ -122,6 +122,50 @@ detail drawer names the root cause.
 worst first — where latency starts) and the **riskiest request paths** from
 outside the cluster, with summed latency where measured.
 
+## Large estates
+
+The same page serves a three-workload home cluster and an estate with thousands, and
+neither should have to think about it. Nothing here needs configuring for a small
+cluster: below the limits it is drawn workload by workload, exactly as described above.
+
+**Topology zooms by meaning, not by pixels.** Above `GALAXY_DETAIL_LIMIT` (150)
+workloads in view, the unit drawn is the **project**; above `GALAXY_PROJECT_LIMIT`
+(60) projects it is the **business unit**: the part of the namespace name before the
+first `-` (`retail-web`, `retail-api` → `retail`), or a namespace label
+(`GALAXY_GROUP_BY=label:<key>`). A unit is drawn like a workload whose pods are its
+members: a star with its projects in orbit, a tower with a floor per project, worst
+first. Its colour says how much of it is in trouble, not merely whether anything is,
+so one failing workload among 700 makes a unit amber rather than red. Calls between
+units merge into one line (summed traffic, worst latency, how many of them are in
+trouble); healthy low-traffic bundles are drawn only for the unit you select.
+
+- **Double-click a unit** (or *Open on the map* in its drawer) to open it in place:
+  a business unit into its projects, a project into its workloads. Everything else
+  stays rolled up. The rail lists what is open and closes it again.
+- At most `GALAXY_NODE_BUDGET` (320) things are ever drawn; when you open more, the
+  oldest expansion closes, and the rail says so.
+- Healthy nodes group by zone; a node with a problem is always shown on its own.
+- Scoping to one project with the Projects filter shows it in full detail, as before.
+- Search, the detail drawer and *Show on map* reach every workload through the
+  server, whether or not it is on the page.
+
+**Triage folds repetition.** The same problem on four or more workloads is reported
+once, as a **shared cause** ("133 workloads in 119 projects: crash-looping,
+application error (exit 1)"), with where it concentrates and a few examples; *Show
+all* lists the members. Projects appear as an **estate grid**, one square each,
+grouped by business unit, next to tiles for the worst few. Problems page 30 at a
+time; the Workloads and Calls tables are filtered, sorted and paged by the server and
+default to *only problems*. Totals always count everything in scope.
+
+Measured on the simulated estate (606 projects, 11,451 workloads, 27,341 pods, 394
+nodes): the collector builds the picture in about 2.6 s, and a page load is one
+60–90 KB request for 30–100 drawn things instead of a 20 MB download.
+
+One limit to know: the collector still lists every object from the API server on
+each refresh. That is fine for thousands of pods; for tens of thousands, raise
+`GALAXY_REFRESH_SECONDS` (60 or more). A watch-based cache is the proper fix and is
+not built yet.
+
 ## Where the data comes from
 
 Each edge records its evidence; the UI shows it as chips.
@@ -207,6 +251,7 @@ scripts/demo-local.sh              # "A bad release day": six deployments failin
 scripts/demo-local.sh network      # wiring and network faults
 scripts/demo-local.sh infrastructure
 scripts/demo-local.sh cascade      # one root cause, many victims
+scripts/demo-local.sh enterprise   # 600 projects, ~11,500 workloads, 390 nodes: how it scales
 scripts/demo-local.sh stop
 ```
 
@@ -340,6 +385,9 @@ An open page notices a redeploy and offers a reload.
 | `GALAXY_RESOLVE_EXTERNAL_HOSTS` | `true` | DNS-resolve config hostnames so observed external IPs get names |
 | `GALAXY_EVENT_WINDOW_SECONDS` | `3600` | warning events older than this are ignored |
 | `GALAXY_POD_LOGS` | `false` | let the drawer fetch the last 80 log lines of a container (also needs `deploy/k8s/optional-pod-logs.yaml`) |
+| `GALAXY_GROUP_BY` | `prefix` | how projects roll up into business units on large estates: `prefix`, `label:<namespace label key>` or `none` |
+| `GALAXY_GROUP_SEPARATOR` | `-` | separator for `prefix` |
+| `GALAXY_DETAIL_LIMIT` / `GALAXY_PROJECT_LIMIT` / `GALAXY_NODE_BUDGET` | `150` / `60` / `320` | workloads drawn individually before rolling up to projects; projects before rolling up to units; most things drawn at once |
 | `GALAXY_INTERNAL_CIDRS` | | extra ranges to count as *your network* (e.g. a company's public blocks); RFC 1918, CGNAT, link-local and ULA are always internal |
 
 Agent: `GALAXY_COLLECTOR_URL`, `GALAXY_AGENT_TOKEN`, `GALAXY_AGENT_INTERVAL` (10s), `GALAXY_CA_FILE`.
@@ -353,9 +401,12 @@ All paths are relative, so the service works behind a path prefix (mount it at
 |---|---|
 | `GET /api/v1/meta` | version, mode, which data sources are live, last error |
 | `GET /api/v1/namespaces` | per namespace: workloads, pods, warning/critical counts, `platform` flag |
-| `GET /api/v1/topology?ns=a,b&platform=true` | the graph: `nodes`, `edges`, `hotspots`, `paths`, `cascades`, `sources` |
+| `GET /api/v1/topology?ns=a,b&platform=true&expand=grp:retail,ns:retail-web` | the graph for one screen: `nodes`, `edges`, `hotspots`, `paths`, `cascades`, `sources`, plus `view` (zoom level, what is expanded) and the findings summary. Large estates come back rolled up; `expand` opens units in place, `level=workloads|projects|units` forces a level |
+| `GET /api/v1/node?id=…` | one workload, host or call from the full graph with its neighbours, calls and findings; `at` is the id it is drawn as in the caller's view |
+| `GET /api/v1/workloads` · `/api/v1/calls` | table rows, with `ns`, `q`, `sort`, `desc`, `offset`, `limit`, `problems` |
+| `GET /api/v1/search?q=…` | workloads, pods, hosts and projects by name |
 | `GET /api/v1/hotspots?ns=…` | hotspots, riskiest paths and failure cascades |
-| `GET /api/v1/triage?ns=…&severity=warning` | the Triage view as data: `findings` (each with `severity`, `category`, `title`, `cause`, `fix`, `commands`, `evidence`, `root`, `causedBy`, `effectOf`, `blast`, `userFacing`), `projects` scorecards, `changes`, `platform`, `counts` |
+| `GET /api/v1/triage?ns=…&severity=warning&pattern=…` | the Triage view as data (with `summary` totals and `patterns`, the shared causes; `pattern=<key>` lists one pattern's members): `findings` (each with `severity`, `category`, `title`, `cause`, `fix`, `commands`, `evidence`, `root`, `causedBy`, `effectOf`, `blast`, `userFacing`), `projects` scorecards, `changes`, `platform`, `counts` |
 | `GET /api/v1/logs?ns=&pod=&container=&previous=` | last log lines of one container; 403 unless `GALAXY_POD_LOGS=true` |
 | `POST /api/v1/agent/report` | agent ingest (`Authorization: Bearer <token>`, gzip OK) |
 | `GET /healthz`, `/readyz` | probes |

@@ -51,7 +51,9 @@ export function computeLayouts(graph) {
 
   let maxDepth = 1;
   for (const n of nodes) if (n.kind !== 'external') maxDepth = Math.max(maxDepth, depth.get(n.id) || 1);
-  const ringR = (d) => (d <= 0 ? 0 : GALAXY.R1 + (d - 1) * GALAXY.RS);
+  // Rolled-up units are big stars with their members in orbit: give them wider orbits.
+  const G = graph.view?.collapsed ? { ...GALAXY, R1: 92, RS: 58, MIN_ARC: 34 } : GALAXY;
+  const ringR = (d) => (d <= 0 ? 0 : G.R1 + (d - 1) * G.RS);
 
   // ---------------- galaxy: namespaces are spiral arms, depth is the orbit
   const groups = new Map();
@@ -97,14 +99,14 @@ export function computeLayouts(graph) {
       level.sort((x, y) => bary(x) - bary(y) || x.name.localeCompare(y.name));
       const r = ringR(d);
       const arc = (a1 - a0) * r;
-      const rows = Math.max(1, Math.ceil((GALAXY.MIN_ARC * level.length) / Math.max(arc, 1)));
+      const rows = Math.max(1, Math.ceil((G.MIN_ARC * level.length) / Math.max(arc, 1)));
       level.forEach((n, i) => {
         const row = i % rows;
         const idx = Math.floor(i / rows);
         const perRow = Math.ceil(level.length / rows);
         const t = perRow === 1 ? 0.5 : (idx + 0.5) / perRow;
-        const ang = a0 + (a1 - a0) * t + GALAXY.TWIST * (d - 1) + row * 0.04;
-        const rr = r + row * GALAXY.RS * 0.42;
+        const ang = a0 + (a1 - a0) * t + G.TWIST * (d - 1) + row * 0.04;
+        const rr = r + row * G.RS * 0.42;
         angle.set(n.id, ang);
         galaxy.set(n.id, { x: Math.cos(ang) * rr, y: (hash01(n.id) - 0.5) * 7, z: Math.sin(ang) * rr });
       });
@@ -122,11 +124,11 @@ export function computeLayouts(graph) {
       : hash01(n.id) * TAU;
     return { n, ang: base };
   }).sort((x, y) => x.ang - y.ang);
-  spreadAngles(extAngles, GALAXY.MIN_ARC / extR);
+  spreadAngles(extAngles, G.MIN_ARC / extR);
   for (const { n, ang } of extAngles) {
     angle.set(n.id, ang);
     // Internet dependencies orbit just beyond those on your own network.
-    const r = n.scope === 'internet' ? extR + GALAXY.RS * 0.8 : extR;
+    const r = n.scope === 'internet' ? extR + G.RS * 0.8 : extR;
     galaxy.set(n.id, { x: Math.cos(ang) * r, y: (hash01(n.id) - 0.5) * 10, z: Math.sin(ang) * r });
   }
   const lanUsers = nodes.some((n) => n.kind === 'clients' && n.scope === 'lan');
@@ -137,7 +139,7 @@ export function computeLayouts(graph) {
   const rings = [];
   for (let d = 1; d <= maxDepth; d++) rings.push(ringR(d));
   if (externals.some((n) => n.scope !== 'internet')) rings.push(extR);
-  if (externals.some((n) => n.scope === 'internet')) rings.push(extR + GALAXY.RS * 0.8);
+  if (externals.some((n) => n.scope === 'internet')) rings.push(extR + G.RS * 0.8);
 
   // ---------------- strata: users / services / pods / hosts planes
   const strata = new Map();

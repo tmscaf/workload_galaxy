@@ -28,6 +28,8 @@ class GalaxyState:
         self.updated_at = 0.0
         self.build_seconds = 0.0
         self._lock = threading.Lock()
+        self._index = None
+        self._views: dict[tuple, tuple] = {}
         self._refresh_lock = threading.Lock()
         self._stop = threading.Event()
         self._probe_thread: threading.Thread | None = None
@@ -99,7 +101,8 @@ class GalaxyState:
                           hidden_namespaces=hidden, sources=sources,
                           flow_idle_seconds=self.settings.flow_idle_seconds,
                           internal_cidrs=self.settings.internal_cidrs,
-                          event_window_seconds=self.settings.event_window_seconds)
+                          event_window_seconds=self.settings.event_window_seconds,
+                          group_by=self.settings.group_by, group_separator=self.settings.group_separator)
         graph = public(builder.build())
         if self.settings.resolve_external_hosts and not demo:
             self._resolve_hosts(graph.get("externalHosts", []))
@@ -109,11 +112,33 @@ class GalaxyState:
             self.graph = graph
             self.updated_at = time.time()
             self.error = None
+            self._index = None
+            self._views.clear()
         return graph
 
     def current(self) -> dict | None:
         with self._lock:
             return self.graph
+
+    def index(self):
+        """Lookups over the current graph (adjacency, table rows), built once per refresh."""
+        from .scale import Index
+        with self._lock:
+            if self._index is None and self.graph is not None:
+                self._index = Index(self.graph)
+            return self._index
+
+    def view(self, key: tuple, build):
+        """What one combination of filter and zoom level looks like, cached until the next refresh."""
+        with self._lock:
+            hit = self._views.get(key)
+        if hit is None:
+            hit = build()
+            with self._lock:
+                if len(self._views) > 24:
+                    self._views.pop(next(iter(self._views)))
+                self._views[key] = hit
+        return hit
 
     # ------------------------------------------------------------------ DNS for external hosts
     def _ext_dns(self) -> dict[str, str]:

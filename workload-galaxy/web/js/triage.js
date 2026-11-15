@@ -28,6 +28,10 @@ export class Triage {
     this.showInfo = false;
     this.query = '';
     this.open = new Set();        // <details> the user opened; survive live refreshes
+    this.shown = 30;              // problem cards rendered; "Show more" adds a page
+    this.pattern = null;          // a fleet pattern opened to list its members
+    this.remote = {};             // server-paged tables (large estates): kind -> {key, rows, total, ...}
+    this.onlyProblems = null;     // tables: null = default for the estate's size
     this.sort = { workloads: ['risk', -1], calls: ['risk', -1] };
     el.innerHTML = `<div class="tg-head"></div><div class="tg-projects"></div>
       <div class="tg-body"><div class="tg-main"><div class="tg-tabs"></div><div class="tg-content"></div></div>
@@ -46,6 +50,8 @@ export class Triage {
     if (!graph) return;
     this.graph = graph;
     this.meta = meta;
+    this.big = !!graph.view?.collapsed;       // the page holds a rolled-up picture: tables come from the server
+    for (const k of Object.keys(this.remote)) this.remote[k].stale = true;
     this.byId = new Map(graph.nodes.map((n) => [n.id, n]));
     this.edgeById = new Map(graph.edges.map((e) => [e.id, e]));
     this._groups();
@@ -59,7 +65,9 @@ export class Triage {
   // Badge for the tab in the top bar: how many root causes need attention.
   static badge(graph) {
     const roots = (graph?.findings || []).filter((f) => f.root && !f.effectOf && f.severity !== 'info');
-    const count = new Set(roots.map((f) => f.subject || f.id)).size;      // one per thing that is wrong
+    const s = graph?.summary;
+    const count = s ? s.problems : new Set(roots.map((f) => f.subject || f.id)).size;      // one per thing that is wrong
+    if (s) return { count, level: s.problemsCritical ? 'critical' : count ? 'warning' : 'ok' };
     return { count, level: roots.some((f) => f.severity === 'critical') ? 'critical' : roots.length ? 'warning' : 'ok' };
   }
 
@@ -102,18 +110,18 @@ export class Triage {
   // ------------------------------------------------------------------ header
   _head() {
     const g = this.graph;
-    const real = this.groups.filter((x) => x.severity !== 'info');
-    const crit = real.filter((x) => x.severity === 'critical').length;
-    const warn = real.length - crit;
-    const projects = new Set(real.map((x) => x.head.namespace).filter(Boolean));
-    const users = real.filter((x) => x.userFacing).length;
+    // Totals come from the server: it counts every finding in scope, not just the ones on this page.
+    const S = g.summary || {};
+    const total = S.problems ?? this.groups.filter((x) => x.severity !== 'info').length;
+    const crit = S.problemsCritical ?? 0, warn = total - crit, nProj = S.projects ?? 0, users = S.userFacing ?? 0;
+    const fleet = (g.patterns || []).filter((p) => p.severity !== 'info');
     const level = crit ? 'critical' : warn ? 'warning' : 'ok';
-    const verdict = !real.length ? 'No problems found'
-      : `${real.length} problem${real.length === 1 ? '' : 's'} to look at`;
-    const sub = !real.length ? 'Every workload in view is running as declared, and no call is slow or failing.'
-      : [crit ? `<b class="c">${crit} critical</b>` : '', warn ? `<b class="w">${warn} warning${warn === 1 ? '' : 's'}</b>` : '',
-        projects.size ? `in ${projects.size} project${projects.size === 1 ? '' : 's'}` : '',
-        users ? `<b class="c">${users} reach${users === 1 ? 'es' : ''} users</b>` : ''].filter(Boolean).join(' · ');
+    const verdict = !total ? 'No problems found' : `${fmtNum(total)} problem${total === 1 ? '' : 's'} to look at`;
+    const sub = !total ? 'Every workload in view is running as declared, and no call is slow or failing.'
+      : [crit ? `<b class="c">${fmtNum(crit)} critical</b>` : '', warn ? `<b class="w">${fmtNum(warn)} warning${warn === 1 ? '' : 's'}</b>` : '',
+        nProj ? `in ${nProj} project${nProj === 1 ? '' : 's'}` : '',
+        users ? `<b class="c">${fmtNum(users)} reach${users === 1 ? 'es' : ''} users</b>` : '',
+        fleet.length ? `<b>${fleet.length} shared cause${fleet.length === 1 ? '' : 's'}</b>` : ''].filter(Boolean).join(' · ');
     const p = g.platform || {};
     const chips = [];
     const nd = p.nodes;
@@ -156,57 +164,129 @@ export class Triage {
 
   // ------------------------------------------------------------------ projects
   _projects() {
-    const inView = new Set(this.graph.nodes.filter((n) => n.kind === 'workload' && !n.ghost).map((n) => n.namespace));
-    const rows = (this.graph.namespaces || []).filter((p) => inView.has(p.name));
+    const scope = this.ctx.scope ? this.ctx.scope() : {};
+    const rows = (this.graph.namespaces || []).filter((p) => (scope.namespaces?.length ? scope.namespaces.includes(p.name) : (scope.platform || !p.platform)) && p.workloads);
     const rank = (p) => (p.down ? 0 : p.findings.critical ? 1 : p.findings.warning || p.degraded ? 2 : 3);
-    rows.sort((a, b) => rank(a) - rank(b) || b.findings.critical - a.findings.critical || a.name.localeCompare(b.name));
-    this.el.querySelector('.tg-projects').innerHTML = rows.map((p) => {
+    rows.sort((a, b) => rank(a) - rank(b) || b.down - a.down || b.findings.critical - a.findings.critical || a.name.localeCompare(b.name));
+    const tile = (p) => {
       const lvl = rank(p) <= 1 ? 'critical' : rank(p) === 2 ? 'warning' : 'ok';
       const bar = (n, c) => (n ? `<i style="flex:${n};background:${c}"></i>` : '');
       return `<button class="tg-proj ${lvl}" data-project="${esc(p.name)}" title="Show only ${esc(p.name)}">
-        <div class="p1"><span class="sw" style="background:${nsColor(p.name, p.platform)}"></span><span class="nm">${esc(p.name)}</span>
+        <div class="p1"><span class="sw" style="background:${nsColor(p.group || p.name, p.platform)}"></span><span class="nm">${esc(p.name)}</span>
           ${p.rolling ? '<span class="tag roll" title="A rollout is in progress or stuck">rolling</span>' : ''}
           ${p.quota >= 0.9 ? `<span class="tag q" title="Project quota">quota ${Math.round(p.quota * 100)}%</span>` : ''}</div>
         <div class="bar">${bar(p.healthy, 'var(--ok)')}${bar(p.degraded, 'var(--warn)')}${bar(p.down, 'var(--crit)')}</div>
         <div class="p2">${p.healthy}/${p.workloads} workloads healthy${p.down ? ` · <b class="c">${p.down} down</b>` : ''} · ${p.podsReady}/${p.pods} pods ready${p.restarts1h ? ` · <b class="w">${p.restarts1h} restarts</b>` : ''}</div>
         <div class="p3 ${p.top ? p.top.severity : ''}">${p.top ? `${esc(p.top.subjectName)}: ${esc(p.top.title)}` : 'No problems'}</div></button>`;
-    }).join('') || '<div class="empty">No projects in view.</div>';
+    };
+    const box = this.el.querySelector('.tg-projects');
+    if (rows.length <= 10) { box.className = 'tg-projects'; box.innerHTML = rows.map(tile).join('') || '<div class="empty">No projects in view.</div>'; return; }
+    // Many projects: the worst few as tiles, and the whole estate as one square per project, by business unit.
+    const bad = rows.filter((p) => rank(p) < 3);
+    const units = new Map();
+    for (const p of rows) { const k = p.group || p.name; if (!units.has(k)) units.set(k, []); units.get(k).push(p); }
+    const unitRows = [...units.entries()].map(([name, ps]) => ({ name, ps, bad: ps.filter((p) => rank(p) < 2).length }))
+      .sort((a, b) => b.bad - a.bad || b.ps.length - a.ps.length || a.name.localeCompare(b.name));
+    box.className = 'tg-projects estate';
+    box.innerHTML = `<div class="tg-estate"><h2>Estate <span class="hint">${rows.length} projects in ${units.size} business unit${units.size === 1 ? '' : 's'} · one square per project · click to scope</span>
+        <span class="key"><i class="ok"></i>healthy <i class="warning"></i>degraded <i class="critical"></i>failing</span></h2>
+      <div class="units">${unitRows.map((u) => `<div class="unit"><div class="un" title="${u.ps.length} projects">${esc(u.name)}<span>${u.bad ? `${u.bad} failing` : ''}</span></div>
+        <div class="sq">${u.ps.map((p) => `<button class="${rank(p) <= 1 ? 'critical' : rank(p) === 2 ? 'warning' : 'ok'}" data-project="${esc(p.name)}"
+          title="${esc(p.name)} · ${p.healthy}/${p.workloads} workloads healthy${p.top ? ' · ' + esc(p.top.subjectName) + ': ' + esc(p.top.title) : ''}"></button>`).join('')}</div></div>`).join('')}</div></div>
+      <div class="tg-worst"><h2>Worst projects <span class="hint">${bad.length} of ${rows.length} have problems</span></h2>
+      <div class="tiles">${bad.slice(0, 8).map(tile).join('') || '<div class="empty">No project has problems.</div>'}</div></div>`;
   }
 
   // ------------------------------------------------------------------ tabs
   _tabs() {
     const real = this.groups.filter((g) => g.severity !== 'info');
     const info = this.groups.length - real.length;
-    const wl = this.graph.nodes.filter((n) => n.kind === 'workload' && !n.ghost).length;
-    const calls = this.graph.edges.filter((e) => e.type !== 'exposes').length;
+    const wl = this.graph.view?.workloads ?? this.graph.nodes.filter((n) => n.kind === 'workload' && !n.ghost).length;
+    const calls = this.big ? (this.remote.calls?.scope ?? '') : this.graph.edges.filter((e) => e.type !== 'exposes').length;
+    const S = this.graph.summary;
+    const only = this.onlyProblems ?? this.big;
     const cats = new Map();
     for (const g of (this.showInfo ? this.groups : real)) for (const c of g.categories) cats.set(c, (cats.get(c) || 0) + 1);
     const order = Object.keys(CATEGORY).filter((c) => cats.has(c));
     const tab = (id, label, n) => `<button class="${this.tab === id ? 'on' : ''}" data-tab="${id}">${label} <span>${n}</span></button>`;
     this.el.querySelector('.tg-tabs').innerHTML = `
-      <div class="seg">${tab('problems', 'Problems', real.length)}${tab('workloads', 'Workloads', wl)}${tab('calls', 'Calls', calls)}</div>
+      <div class="seg">${tab('problems', 'Problems', S ? fmtNum(S.problems) : real.length)}${tab('workloads', 'Workloads', fmtNum(wl))}${tab('calls', 'Calls', calls === '' ? '' : fmtNum(calls))}</div>
+      ${this.tab !== 'problems' ? `<label class="tg-info" title="Hide rows that are healthy"><input type="checkbox" id="tgOnly" ${only ? 'checked' : ''}> Only problems</label>` : ''}
       ${this.tab === 'problems' ? `<div class="cats"><button class="${!this.category ? 'on' : ''}" data-cat="">All</button>
         ${order.map((c) => `<button class="${this.category === c ? 'on' : ''}" data-cat="${c}">${CATEGORY[c]} <span>${cats.get(c)}</span></button>`).join('')}</div>
-        <label class="tg-info" title="Hardening gaps and other things that are not failures"><input type="checkbox" id="tgInfo" ${this.showInfo ? 'checked' : ''}> Show ${info} informational</label>` : ''}
+        <label class="tg-info" title="Hardening gaps and other things that are not failures"><input type="checkbox" id="tgInfo" ${this.showInfo ? 'checked' : ''}> Show informational</label>` : ''}
       <input id="tgSearch" type="search" placeholder="Filter…" value="${esc(this.query)}" autocomplete="off">`;
   }
 
   _content() {
     const box = this.el.querySelector('.tg-content');
-    box.innerHTML = this.tab === 'workloads' ? this._workloads() : this.tab === 'calls' ? this._calls() : this._problems();
+    box.innerHTML = this.tab === 'workloads' ? this._table('workloads') : this.tab === 'calls' ? this._table('calls') : this._problems();
   }
 
   // ------------------------------------------------------------------ problems
   _problems() {
     const q = this.query;
+    if (this.pattern) return this._patternMembers();
+    const match = (text) => !q || text.toLowerCase().includes(q);
+    const patterns = (this.graph.patterns || []).filter((p) => (this.showInfo || p.severity !== 'info')
+      && (!this.category || p.category === this.category) && match(`${p.label} ${p.cause}`));
     const list = this.groups.filter((g) => (this.showInfo || g.severity !== 'info')
       && (!this.category || g.categories.has(this.category))
-      && (!q || [g.head.subjectName, g.head.namespace, ...g.findings.map((f) => f.title + ' ' + f.cause)].join(' ').toLowerCase().includes(q)));
-    if (!list.length) {
-      return `<div class="tg-clear">${this.groups.some((g) => g.severity !== 'info') ? 'Nothing matches this filter.'
+      && match([g.head.subjectName, g.head.namespace, ...g.findings.map((f) => f.title + ' ' + f.cause)].join(' ')));
+    if (!list.length && !patterns.length) {
+      return `<div class="tg-clear">${(this.graph.summary?.problems || this.groups.some((g) => g.severity !== 'info')) ? 'Nothing matches this filter.'
         : '<b>Nothing is failing.</b> Rollouts are complete, pods are ready, calls are answering in time.'}</div>`;
     }
-    return list.map((g) => this._card(g)).join('');
+    const more = list.length - this.shown;
+    const hidden = (this.graph.findingsMatching || 0) - (this.graph.findings || []).length;
+    return (patterns.length ? `<h3 class="tg-h">Shared causes <span class="hint">the same problem on several workloads, shown once</span></h3>${patterns.map((p) => this._pattern(p)).join('')}` : '')
+      + (list.length && patterns.length ? '<h3 class="tg-h">Individual problems</h3>' : '')
+      + list.slice(0, this.shown).map((g) => this._card(g)).join('')
+      + (more > 0 ? `<button class="btn tg-more" data-more="1">Show ${Math.min(30, more)} more of ${more}</button>` : '')
+      + (hidden > 0 ? `<div class="tg-note">Showing the ${this.graph.findings.length} most severe of ${fmtNum(this.graph.findingsMatching)} findings. Scope to a project or business unit to see the rest.</div>` : '');
+  }
+
+  // One cause, many subjects: "40 workloads in 38 projects are crash-looping: application error (exit 1)".
+  _pattern(p) {
+    const noun = { workload: 'workload', call: 'call', host: 'node', entry: 'route', service: 'Service' }[p.kind] || 'project';
+    const units = p.units.filter((u) => u.name !== 'cluster').map((u) => `${esc(u.name)} ${u.count}`).join(' · ');
+    return `<article class="tg-card tg-pat ${p.severity}">
+      <header><span class="sev" style="background:${SEV_COLOR[p.severity]}"></span>
+        <span class="n">${fmtNum(p.count)}</span><span class="nm2">${noun}${p.count === 1 ? '' : 's'}${p.projects ? ` in ${p.projects} project${p.projects === 1 ? '' : 's'}` : ''}: ${esc(p.label)}</span>
+        ${p.userFacing ? `<span class="tag users">${p.userFacing} reach users</span>` : ''}
+        <button class="link map" data-pattern="${esc(p.key)}">Show all ${fmtNum(p.count)} ▸</button></header>
+      <section class="tg-f ${p.severity}"><div class="t"><span class="cat">${esc(CATEGORY[p.category] || p.category)}</span>
+        <span class="title sub">${units ? `Most in: ${units}` : ''}</span></div>
+        ${p.cause ? `<p class="why"><b>Why</b>${esc(p.cause)}</p>` : ''}${p.fix ? `<p class="fix"><b>Next</b>${esc(p.fix)}</p>` : ''}
+        <div class="pods ex"><span>e.g.</span>${p.examples.map((x) => `<a ${x.subject.includes('->') ? 'data-edge' : 'data-node'}="${esc(x.subject)}" title="${esc(x.title)}">${esc(x.subjectName)}${x.namespace ? `<i>${esc(x.namespace)}</i>` : ''}</a>`).join('')}</div>
+      </section></article>`;
+  }
+
+  _patternMembers() {
+    const st = this.patternData;
+    const p = (this.graph.patterns || []).find((x) => x.key === this.pattern);
+    const head = `<div class="tg-back"><button class="link" data-pattern="">← All problems</button>
+      <b>${p ? `${fmtNum(p.count)} × ${esc(p.label)}` : 'This problem is no longer occurring.'}</b></div>`;
+    if (!st || st.key !== this.pattern || st.stale) {
+      if (!st || st.key !== this.pattern) this.patternData = { key: this.pattern, loading: true, groups: [] };
+      else st.stale = false;
+      this.ctx.fetchPattern(this.pattern).then((res) => {
+        if (this.pattern !== res.key) return;
+        const keep = this.graph.findings;
+        this.graph.findings = res.findings;
+        this._groups();
+        this.patternData = { key: res.key, groups: this.groups, total: res.findingsMatching };
+        this.graph.findings = keep;
+        this._groups();
+        this._content();
+      }).catch(() => {});
+      if (!st || st.key !== this.pattern) return head + '<div class="tg-clear">Loading…</div>';
+    }
+    const groups = (this.patternData.groups || []).filter((g) => !this.query
+      || `${g.head.subjectName} ${g.head.namespace}`.toLowerCase().includes(this.query));
+    const more = groups.length - this.shown;
+    return head + groups.slice(0, this.shown).map((g) => this._card(g)).join('')
+      + (more > 0 ? `<button class="btn tg-more" data-more="1">Show ${Math.min(30, more)} more of ${more}</button>` : '');
   }
 
   _card(g) {
@@ -260,31 +340,67 @@ export class Triage {
       <summary>${by.size} downstream symptom${by.size === 1 ? '' : 's'} — these clear when the cause above is fixed</summary><ul>${rows.join('')}</ul></details>`;
   }
 
-  // ------------------------------------------------------------------ workloads table
-  _workloads() {
+  // ------------------------------------------------------------------ tables
+  // Small estates: rows are computed here from the graph. Large ones: the server filters, sorts and pages.
+  _table(kind) {
+    const only = this.onlyProblems ?? this.big;
+    const [col, dir] = this.sort[kind];
+    if (!this.big) {
+      let rows = (kind === 'workloads' ? this._localWorkloads() : this._localCalls())
+        .filter((r) => (!only || (r.level !== 'ok' && r.level !== 'inherit')) && (!this.query || r.text.includes(this.query)));
+      rows.sort((a, b) => (typeof a[col] === 'string' ? a[col].localeCompare(b[col]) * -dir : (a[col] - b[col]) * dir) || b.risk - a.risk);
+      return kind === 'workloads' ? this._workloadTable(rows) : this._callTable(rows);
+    }
+    const key = JSON.stringify([col, dir, this.query, only, this.ctx.scope()]);
+    let st = this.remote[kind];
+    if (!st || st.key !== key || st.stale) {
+      const fresh = !st || st.key !== key;
+      if (fresh) st = this.remote[kind] = { key, rows: [], total: 0, loading: true };
+      st.stale = false;
+      this._fetchTable(kind, key, 0, fresh ? 100 : Math.max(100, st.rows.length), true);
+    }
+    const body = kind === 'workloads' ? this._workloadTable(st.rows) : this._callTable(st.rows);
+    const left = st.total - st.rows.length;
+    return `<div class="tg-count">${st.loading && !st.rows.length ? 'Loading…' : `${fmtNum(st.total)} ${only ? 'with problems' : 'matching'} of ${fmtNum(st.scope || 0)} ${kind}`}</div>${body}
+      ${left > 0 ? `<button class="btn tg-more" data-page="${kind}">Show 100 more of ${fmtNum(left)}</button>` : ''}`;
+  }
+
+  _fetchTable(kind, key, offset, limit, replace) {
+    const [col, dir] = this.sort[kind];
+    this.ctx.fetchTable(kind, { sort: col, desc: dir < 0, q: this.query, problems: this.onlyProblems ?? this.big, offset, limit }).then((res) => {
+      const st = this.remote[kind];
+      if (!st || st.key !== key) return;
+      st.rows = replace ? res.rows : st.rows.concat(res.rows);
+      Object.assign(st, { total: res.total, scope: res.scope, loading: false });
+      if (this.tab === kind) { this._tabs(); this._content(); }
+    }).catch(() => {});
+  }
+
+  _localWorkloads() {
     const edges = this.graph.edges;
-    const rows = this.graph.nodes.filter((n) => n.kind === 'workload' && !n.ghost).map((n) => {
+    return this.graph.nodes.filter((n) => n.kind === 'workload' && !n.ghost && !n.aggregate).map((n) => {
       const inbound = edges.filter((e) => e.target === n.id && e.type !== 'exposes');
-      const outbound = edges.filter((e) => e.source === n.id);
-      const worstOut = outbound.filter((e) => e.latency.estimateMs != null).sort((a, b) => b.latency.estimateMs - a.latency.estimateMs)[0];
+      const worstOut = edges.filter((e) => e.source === n.id && e.latency.estimateMs != null).sort((a, b) => b.latency.estimateMs - a.latency.estimateMs)[0];
       const top = (this.graph.findings || []).find((f) => f.subject === n.id && f.severity !== 'info' && !f.effectOf);
       const inherit = n.risk.impactLevel !== 'ok' && n.risk.level === 'ok';
+      const issue = top ? top.title : inherit ? `Slowed by ${this._name(n.risk.impactFrom)}` : '';
       return {
-        n, risk: n.risk.score + (n.risk.impact || 0) * 0.3, name: n.name, ns: n.namespace,
-        ready: n.replicas.desired ? n.replicas.ready / n.replicas.desired : 1,
-        restarts: n.pods.reduce((s, p) => s + (p.terminal ? 0 : p.recentRestarts || 0), 0),
+        id: n.id, name: n.name, ns: n.namespace, kind: n.subkind, platform: n.platform, risk: n.risk.score + (n.risk.impact || 0) * 0.3,
+        level: n.risk.level !== 'ok' ? n.risk.level : inherit ? 'inherit' : 'ok',
+        readyN: n.replicas.ready, desired: n.replicas.desired, ready: n.replicas.desired ? n.replicas.ready / n.replicas.desired : 1,
+        rollout: n.rollout || null, age: n.rollout?.ageSeconds ?? 1e12,
+        restarts: n.pods.reduce((x, p) => x + (p.terminal ? 0 : p.recentRestarts || 0), 0),
         cpu: n.usage?.cpuRatio ?? -1, mem: n.usage?.memRatio ?? -1,
-        inP95: Math.max(-1, ...inbound.map((e) => e.latency.p95Ms ?? -1)),
-        inErr: Math.max(0, ...inbound.map((e) => e.health.errorRate || 0)),
-        rps: inbound.reduce((s, e) => s + (e.traffic.rps || 0), 0),
+        inP95: Math.max(-1, ...inbound.map((e) => e.latency.p95Ms ?? -1)), inErr: Math.max(0, ...inbound.map((e) => e.health.errorRate || 0)),
+        rps: inbound.reduce((x, e) => x + (e.traffic.rps || 0), 0),
         out: worstOut ? worstOut.latency.estimateMs : -1, outName: worstOut ? this.byId.get(worstOut.target)?.name : '',
-        age: n.rollout?.ageSeconds ?? 1e12,
-        issue: top ? top.title : inherit ? `Slowed by ${this._name(n.risk.impactFrom)}` : '',
-        issueLvl: top ? top.severity : inherit ? n.risk.impactLevel : 'ok',
+        issue, issueLvl: top ? top.severity : inherit ? n.risk.impactLevel : 'ok', text: `${n.name} ${n.namespace} ${issue}`.toLowerCase(),
       };
-    }).filter((r) => !this.query || `${r.name} ${r.ns} ${r.issue}`.toLowerCase().includes(this.query));
+    });
+  }
+
+  _workloadTable(rows) {
     const [col, dir] = this.sort.workloads;
-    rows.sort((a, b) => (typeof a[col] === 'string' ? a[col].localeCompare(b[col]) * -dir : (a[col] - b[col]) * dir) || b.risk - a.risk);
     const th = (id, label, title = '') => `<th data-sort="workloads:${id}" class="${col === id ? 'on' : ''}" title="${esc(title)}">${label}${col === id ? (dir < 0 ? ' ▾' : ' ▴') : ''}</th>`;
     const pct = (r) => (r < 0 ? '<td class="num dim">–</td>' : `<td class="num ${r >= 0.9 ? 'c' : r >= 0.75 ? 'w' : ''}">${Math.round(r * 100)}%</td>`);
     const ROLL = { complete: '', progressing: 'w', stuck: 'c', failed: 'c', paused: 'w' };
@@ -294,12 +410,11 @@ export class Triage {
       ${th('rps', 'Req/s', 'Inbound requests per second (mesh)')}${th('inP95', 'p95 in', 'Slowest inbound request p95: what callers experience')}${th('inErr', 'Err in', 'Highest inbound 5xx rate')}
       ${th('out', 'Slowest dependency', 'Its slowest downstream call')}<th>Top issue</th></tr></thead><tbody>
       ${rows.map((r) => {
-        const n = r.n, ro = n.rollout;
-        const lvl = n.risk.level !== 'ok' ? n.risk.level : n.risk.impactLevel !== 'ok' ? 'inherit' : 'ok';
-        return `<tr data-node="${esc(n.id)}"><td><span class="dot ${lvl}" title="${lvl === 'inherit' ? 'Healthy itself; slowed by a dependency' : lvl}"></span></td>
-          <td class="nm">${esc(n.name)}<span class="k">${esc(n.subkind)}</span></td>
-          <td><span class="ns" style="--c:${nsColor(n.namespace, n.platform)}">${esc(n.namespace)}</span></td>
-          <td class="num ${r.ready === 0 && n.replicas.desired ? 'c' : r.ready < 1 ? 'w' : ''}">${n.replicas.ready}/${n.replicas.desired}</td>
+        const ro = r.rollout;
+        return `<tr data-node="${esc(r.id)}"><td><span class="dot ${r.level}" title="${r.level === 'inherit' ? 'Healthy itself; slowed by a dependency' : r.level}"></span></td>
+          <td class="nm">${esc(r.name)}<span class="k">${esc(r.kind)}</span></td>
+          <td><span class="ns" style="--c:${nsColor(r.ns, r.platform)}">${esc(r.ns)}</span></td>
+          <td class="num ${r.ready === 0 && r.desired ? 'c' : r.ready < 1 ? 'w' : ''}">${r.readyN}/${r.desired}</td>
           <td class="${ro ? ROLL[ro.state] || '' : 'dim'}">${ro ? `${ro.state === 'complete' ? '' : ro.state + ' · '}${ro.revision ? 'rev ' + ro.revision + ' · ' : ''}${ro.ageSeconds != null ? ago(ro.ageSeconds) : ''}` : '–'}</td>
           <td class="num ${r.restarts >= 3 ? 'c' : r.restarts ? 'w' : 'dim'}">${r.restarts || '–'}</td>${pct(r.cpu)}${pct(r.mem)}
           <td class="num ${r.rps ? '' : 'dim'}">${r.rps ? fmtNum(r.rps) : '–'}</td>
@@ -318,40 +433,41 @@ export class Triage {
     return e ? `${this.byId.get(e.source)?.name} → ${this.byId.get(e.target)?.name}` : id.split('/').pop();
   }
 
-  // ------------------------------------------------------------------ calls table (latency, upstream → downstream)
-  _calls() {
-    const rows = this.graph.edges.filter((e) => e.type !== 'exposes').map((e) => {
+  _localCalls() {
+    return this.graph.edges.filter((e) => e.type !== 'exposes').map((e) => {
       const s = this.byId.get(e.source), t = this.byId.get(e.target);
       const f = (this.graph.findings || []).find((x) => x.subject === e.id && x.severity !== 'info');
+      const note = f ? (f.root ? f.title.split(': ').slice(1).join(': ') || f.title : `symptom of ${f.causedByName}`)
+        : e.traffic.idle ? 'idle' : (!e.evidence.includes('observed') && !e.evidence.includes('mesh')) ? 'declared in config, no traffic seen' : '';
       return {
-        e, s, t, risk: e.risk.score, from: s?.name || '', to: t?.name || '', rps: e.traffic.rps ?? -1,
+        id: e.id, risk: e.risk.score, level: e.risk.level, from: s?.name || '', to: t?.name || '',
+        fromNs: s?.namespace || s?.kind || '', toNs: t?.namespace || (t?.kind === 'external' ? (t.scope || 'external') : t?.kind) || '',
+        external: t?.kind === 'external', rps: e.traffic.rps ?? -1, conns: e.traffic.connections ?? -1,
         p50: e.latency.p50Ms ?? -1, p95: e.latency.p95Ms ?? -1, err: e.health.errorRate || 0, rtt: e.latency.rttMinMs ?? -1,
-        bad: (e.health.retrans || 0) + (e.health.pending || 0) * 10, conns: e.traffic.connections ?? -1,
-        note: f ? (f.root ? f.title.split(': ').slice(1).join(': ') || f.title : `symptom of ${f.causedByName}`)
-          : e.traffic.idle ? 'idle' : (!e.evidence.includes('observed') && !e.evidence.includes('mesh')) ? 'declared in config, no traffic seen' : '',
+        pending: e.health.pending || 0, retrans: e.health.retrans || 0, bad: (e.health.retrans || 0) + (e.health.pending || 0) * 10,
+        evidence: e.evidence, note, text: `${s?.name} ${t?.name} ${note}`.toLowerCase(),
       };
-    }).filter((r) => !this.query || `${r.from} ${r.to} ${r.note}`.toLowerCase().includes(this.query));
+    });
+  }
+
+  _callTable(rows) {
     const [col, dir] = this.sort.calls;
-    rows.sort((a, b) => (typeof a[col] === 'string' ? a[col].localeCompare(b[col]) * -dir : (a[col] - b[col]) * dir) || b.p95 - a.p95);
     const th = (id, label, title = '') => `<th data-sort="calls:${id}" class="${col === id ? 'on' : ''}" title="${esc(title)}">${label}${col === id ? (dir < 0 ? ' ▾' : ' ▴') : ''}</th>`;
     const ms = (v, warn, crit) => (v < 0 ? '<td class="num dim">–</td>' : `<td class="num ${v > crit ? 'c' : v > warn ? 'w' : ''}">${fmtMs(v)}</td>`);
     return `<table class="tg-table"><thead><tr>${th('risk', '', 'Sort by severity')}${th('from', 'Caller (upstream)')}${th('to', 'Callee (downstream)')}
       ${th('rps', 'Req/s')}${th('conns', 'Conns', 'Open connections seen by the node agent')}${th('p50', 'p50')}${th('p95', 'p95', 'Request latency from mesh metrics')}
       ${th('err', '5xx')}${th('rtt', 'Path RTT', 'Network round trip (kernel minimum): the path, not the app')}${th('bad', 'Loss', 'Retransmitting segments / unanswered connection attempts')}
       <th>Evidence</th><th>Note</th></tr></thead><tbody>
-      ${rows.map((r) => {
-        const e = r.e;
-        return `<tr data-edge="${esc(e.id)}"><td><span class="dot ${e.risk.level}"></span></td>
-          <td class="nm">${esc(r.from)}<span class="k">${esc(r.s?.namespace || r.s?.kind || '')}</span></td>
-          <td class="nm">${esc(r.to)}<span class="k">${esc(r.t?.namespace || (r.t?.kind === 'external' ? (r.t.scope || 'external') : r.t?.kind) || '')}</span></td>
+      ${rows.map((r) => `<tr data-edge="${esc(r.id)}"><td><span class="dot ${r.level}"></span></td>
+          <td class="nm">${esc(r.from)}<span class="k">${esc(r.fromNs)}</span></td>
+          <td class="nm">${esc(r.to)}<span class="k">${esc(r.toNs)}</span></td>
           <td class="num ${r.rps < 0 ? 'dim' : ''}">${r.rps < 0 ? '–' : fmtNum(r.rps)}</td><td class="num ${r.conns < 0 ? 'dim' : ''}">${r.conns < 0 ? '–' : r.conns}</td>
           ${ms(r.p50, 100, 500)}${ms(r.p95, 300, 1000)}
           <td class="num ${r.err > 0.05 ? 'c' : r.err > 0.01 ? 'w' : 'dim'}">${r.err ? fmtPct(r.err) : '–'}</td>
-          ${r.t?.kind === 'external' ? `<td class="num ${r.rtt < 0 ? 'dim' : ''}">${r.rtt < 0 ? '–' : fmtMs(r.rtt)}</td>` : ms(r.rtt, 2, 10)}
-          <td class="num ${e.health.pending ? 'c' : e.health.retrans ? 'w' : 'dim'}">${e.health.pending ? e.health.pending + ' unanswered' : e.health.retrans ? e.health.retrans + ' retrans' : '–'}</td>
-          <td>${e.evidence.map((x) => `<span class="ev ${x}">${x}</span>`).join(' ')}</td>
-          <td class="issue ${e.risk.level === 'ok' ? 'ok' : e.risk.level}">${esc(r.note)}</td></tr>`;
-      }).join('')}</tbody></table>`;
+          ${r.external ? `<td class="num ${r.rtt < 0 ? 'dim' : ''}">${r.rtt < 0 ? '–' : fmtMs(r.rtt)}</td>` : ms(r.rtt, 2, 10)}
+          <td class="num ${r.pending ? 'c' : r.retrans ? 'w' : 'dim'}">${r.pending ? r.pending + ' unanswered' : r.retrans ? r.retrans + ' retrans' : '–'}</td>
+          <td>${r.evidence.map((x) => `<span class="ev ${x}">${x}</span>`).join(' ')}</td>
+          <td class="issue ${r.level === 'ok' ? 'ok' : r.level}">${esc(r.note)}</td></tr>`).join('')}</tbody></table>`;
   }
 
   // ------------------------------------------------------------------ what changed
@@ -367,13 +483,17 @@ export class Triage {
 
   // ------------------------------------------------------------------ interaction
   _click(ev) {
-    const t = ev.target.closest('[data-copy],[data-tab],[data-cat],[data-sort],[data-project],[data-platform],[data-pod],[data-edge],[data-node],#tgInfo');
+    const t = ev.target.closest('[data-copy],[data-tab],[data-cat],[data-sort],[data-project],[data-platform],[data-pattern],[data-more],[data-page],[data-pod],[data-edge],[data-node],#tgInfo,#tgOnly');
     if (!t) return;
     const d = t.dataset;
     if (d.copy != null) { this.ctx.copy(d.copy); t.textContent = 'copied'; setTimeout(() => { t.textContent = 'copy'; }, 1200); return; }
-    if (d.tab) { this.tab = d.tab; this._tabs(); this._content(); return; }
-    if (d.cat != null) { this.category = d.cat || null; this._tabs(); this._content(); return; }
+    if (d.tab) { this.tab = d.tab; this.shown = 30; this._tabs(); this._content(); return; }
+    if (d.cat != null) { this.category = d.cat || null; this.shown = 30; this._tabs(); this._content(); return; }
     if (t.id === 'tgInfo') { this.showInfo = t.checked; this._tabs(); this._content(); return; }
+    if (t.id === 'tgOnly') { this.onlyProblems = t.checked; this._tabs(); this._content(); return; }
+    if (d.pattern != null) { this.pattern = d.pattern || null; this.shown = 30; this._content(); this.el.scrollTop = Math.min(this.el.scrollTop, this.el.querySelector('.tg-body').offsetTop); return; }
+    if (d.more) { this.shown += 30; this._content(); return; }
+    if (d.page) { const st = this.remote[d.page]; if (st) this._fetchTable(d.page, st.key, st.rows.length, 100, false); return; }
     if (d.sort) {
       const [table, col] = d.sort.split(':');
       const cur = this.sort[table];

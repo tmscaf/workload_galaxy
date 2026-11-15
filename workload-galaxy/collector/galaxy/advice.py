@@ -364,3 +364,29 @@ HOST = {
                  "Uncordon it when maintenance is over.", ["{cli} uncordon {name}"]),
 }
 HOST_INFO = {"agent-stale", "cordoned", "node-mem-limits"}
+
+
+# Generic wording for fleet patterns ("N workloads: <label>").
+PATTERN_LABELS = {
+    "wl:replicas": "fewer pods ready than desired", "wl:unschedulable": "pods that can't be scheduled",
+    "wl:evicted": "pods evicted by their node", "wl:restarts": "containers restarting", "wl:cpu": "CPU at its limit (throttled)",
+    "wl:mem": "memory close to its limit", "wl:hpa-max": "autoscaler pinned at its maximum",
+    "wl:accept-queue": "connections queueing faster than the app accepts them", "wl:recvq": "app not reading its sockets fast enough",
+    "wl:probe-fail": "connections to the pods failing", "wl:probe-slow": "slow to accept connections",
+    "wl:single-replica": "single replica serving several callers",
+    "call:p95": "slow calls", "call:errors": "calls returning server errors", "call:rtt": "slow network path",
+    "call:retrans": "packet loss on calls", "call:sendq": "callee not reading what callers send",
+    "call:pending": "connection attempts going unanswered", "call:probe-fail": "test connections failing",
+    "call:connect-slow": "slow to connect", "call:svc-no-pods": "calls into a Service with no pods",
+    "call:target-unready": "calls into workloads with no ready pods", "call:cross-zone": "calls crossing zones",
+    "gaps": "hardening gaps (missing probes, requests, limits, pinned tags)", "svc-empty": "Services that select no pods",
+    "svc-port": "Services pointing at a port the pods don't listen on", "netpol": "calls blocked by a NetworkPolicy",
+    "entry-nosvc": "routes pointing at a Service that doesn't exist", "entry-port": "routes using a port the Service doesn't expose",
+    "route-rejected": "routes not admitted", "route-unclaimed": "routes no router serves", "ingress-unclaimed": "Ingresses with no controller",
+    "pvc-pending": "volume claims not bound", "pvc-lost": "volume claims that lost their volume", "pvc-missing": "missing volume claims",
+    "quota": "project quotas nearly or fully used", "job": "failed jobs", "hpa": "autoscalers that can't scale",
+    "cert-expired": "expired certificates", "cert-notready": "certificates not issued", "cert-expiring": "certificates about to expire",
+    "node:notready": "nodes not ready", "node:node-cpu": "nodes with CPU saturated", "node:node-mem": "nodes with memory saturated",
+    "node:node-mem-req": "nodes with memory reservations exhausted", "node:node-cpu-req": "nodes with CPU reservations exhausted",
+    "node:node-retrans": "nodes with packet loss", "node:cordoned": "cordoned nodes", "node:agent-stale": "nodes whose flow agent stopped reporting",
+}

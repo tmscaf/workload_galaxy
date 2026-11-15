@@ -88,12 +88,79 @@ def _uid(text: str) -> str:
 class DemoSource:
     in_cluster = False
 
-    def __init__(self) -> None:
+    def __init__(self, scale: str | None = None) -> None:
+        import os
         self.started = time.time()
         self.rng = random.Random(7)
         self.active: list[str] = []
         self.world: World | None = None
+        self.hosts = list(HOSTS)
+        self.workloads = list(WORKLOADS)
+        self.mesh_calls = list(CALLS)
+        self.faults: dict[str, str] = {}
+        self.routes: list[tuple[str, str]] = []
+        self._scale(scale if scale is not None else os.environ.get("GALAXY_DEMO_SCALE", ""))
         self._build_static()
+
+    # ----------------------------------------------------------------- scale
+    def _scale(self, spec: str) -> None:
+        """GALAXY_DEMO_SCALE="150x20" (projects x average workloads) or "enterprise": add that many
+        synthetic projects around the base shop, with a few percent of workloads failing, so the UI
+        and the collector can be exercised at the size of a real enterprise cluster."""
+        spec = (spec or "").strip().lower()
+        if not spec:
+            return
+        spec = {"enterprise": "150x20", "enterprise-xl": "600x20"}.get(spec, spec)
+        try:
+            projects, avg = (int(x) for x in spec.split("x"))
+        except ValueError:
+            return
+        rng = random.Random(11)
+        teams = ["retail", "lending", "cards", "risk", "claims", "logistics", "portal", "billing", "ident", "mobile",
+                 "partner", "hr", "supply", "analytics", "treasury"]
+        areas = ["web", "core", "edge", "batch", "tools", "api", "ops", "data", "intake", "ledger", "notify", "docs"]
+        stems = ["order", "quote", "price", "invoice", "account", "profile", "rules", "audit", "report", "notify",
+                 "export", "import", "match", "score", "limit", "rate", "claim", "policy", "route", "stock",
+                 "catalog", "offer", "session", "token", "event", "queue", "search", "index", "render", "sync"]
+        roles = [("api", "Deployment"), ("svc", "Deployment"), ("worker", "Deployment"), ("web", "Deployment"),
+                 ("cache", "StatefulSet"), ("db", "StatefulSet")]
+        shared: list[str] = []
+        pods = sum(w[3] for w in self.workloads)
+        for p in range(projects):
+            # Trouble clusters: most projects are quiet, a few are having a bad day.
+            troubled = rng.random() < 0.07
+            ns = f"{teams[p % len(teams)]}-{areas[(p // len(teams)) % len(areas)]}" + \
+                (f"-{p // (len(teams) * len(areas)) + 1}" if p >= len(teams) * len(areas) else "")
+            count = max(3, int(rng.gauss(avg, avg * 0.45)))
+            names: list[str] = []
+            for i in range(count):
+                role, kind = roles[0] if i == 0 else rng.choices(roles, weights=[5, 6, 4, 2, 1, 1])[0]
+                name = f"{rng.choice(stems)}-{role}"
+                if name in names:
+                    name = f"{name}-{i}"
+                names.append(name)
+                replicas = 1 if kind == "StatefulSet" else rng.choice([1, 2, 2, 3, 3, 4])
+                pods += replicas
+                self.workloads.append((ns, name, kind, replicas, 8080, 0.5, round(0.03 + rng.random() * 0.14, 2), 512,
+                                       int(120 + rng.random() * 260)))
+                key = f"{ns}/{name}"
+                if i:      # called by something earlier in the same project: a call tree per project
+                    lat = rng.choice([4, 6, 9, 14, 22])
+                    self.mesh_calls.append((f"{ns}/{rng.choice(names[:i])}", key, rng.choice([5, 12, 30, 60, 120]),
+                                            lat, lat * rng.choice([2, 3, 4]), 0.0, True))
+                roll = rng.random()
+                if roll < (0.16 if troubled else 0.004):
+                    self.faults[key] = rng.choice(["crash", "crash", "image", "notready", "oom", "pending"])
+                elif roll < (0.2 if troubled else 0.006):
+                    self.faults[key] = "slow"
+            self.routes.append((ns, names[0]))
+            if shared and rng.random() < 0.45:      # some projects lean on another team's API
+                self.mesh_calls.append((f"{ns}/{names[0]}", rng.choice(shared), 20, 12, 40, 0.0, True))
+            if rng.random() < 0.3:
+                shared.append(f"{ns}/{names[0]}")
+        zones = ["us-east-1a", "us-east-1b", "us-east-1c"]
+        for i in range(len(self.hosts), max(len(self.hosts), -(-pods // 70))):
+            self.hosts.append((f"ocp-worker-{i + 1}", f"10.0.{1 + i // 200}.{11 + i % 200}", zones[i % 3]))
 
     # ----------------------------------------------------------------- static objects
     def _build_static(self) -> None:
@@ -108,8 +175,8 @@ class DemoSource:
         self.port: dict[str, int] = {}
         self.usage: dict[str, tuple[float, float]] = {}
         created = "2026-10-01T12:00:00Z"
-        for name, ip, zone in HOSTS:
-            idx = int(name[-1])
+        for name, ip, zone in self.hosts:
+            idx = int(name.rsplit("-", 1)[1])
             self.objs["nodes"].append({
                 "metadata": {"name": name, "labels": {"topology.kubernetes.io/zone": zone,
                                                       "node-role.kubernetes.io/worker": ""}},
@@ -121,22 +188,23 @@ class DemoSource:
                            "nodeInfo": {"kubeletVersion": "v1.31.6", "osImage": "Red Hat Enterprise Linux CoreOS 418"}},
             })
         call_targets: dict[str, list[str]] = {}
-        for src, dst, *_ in CALLS:
+        for src, dst, *_ in self.mesh_calls:
             call_targets.setdefault(src, []).append(dst)
+        ports = {f"{w[0]}/{w[1]}": w[4] for w in self.workloads}
         for src, dst in CONFIG_ONLY:
             call_targets.setdefault(src, []).append(dst)
         ext_env = {src: (host, port) for src, host, _ip, port, _rtt in EXTERNAL_CALLS}
 
         n_svc = 0
         pod_counter = 0
-        for ns, name, kind, replicas, port, cpu_l, cpu_u, mem_l, mem_u in WORKLOADS:
+        for ns, name, kind, replicas, port, cpu_l, cpu_u, mem_l, mem_u in self.workloads:
             key = f"{ns}/{name}"
             self.port[key] = port
             labels = {"app": name}
             env = []
             for dst in call_targets.get(key, []):
                 dns, dname = dst.split("/")
-                dport = next((w[4] for w in WORKLOADS if w[0] == dns and w[1] == dname), 8080)
+                dport = ports.get(dst, 8080)
                 var = dname.upper().replace("-", "_")
                 host = dname if dns == ns else f"{dname}.{dns}.svc.cluster.local"
                 env.append({"name": f"{var}_URL", "value": f"http://{host}:{dport}"})
@@ -156,8 +224,8 @@ class DemoSource:
                    "status": {}}
             plural = {"Deployment": "deployments", "StatefulSet": "statefulsets", "DaemonSet": "daemonsets"}[kind]
             if kind == "DaemonSet":
-                obj["status"]["desiredNumberScheduled"] = len(HOSTS)
-                replicas = len(HOSTS)
+                obj["status"]["desiredNumberScheduled"] = len(self.hosts)
+                replicas = len(self.hosts)
             self.objs[plural].append(obj)
             owner = {"kind": kind, "name": name, "controller": True}
             if kind == "Deployment":
@@ -190,11 +258,13 @@ class DemoSource:
                     pname = f"{name}-{_h(key + str(i), 5)}"
                 else:
                     pname = f"{owner['name']}-{_h(key + str(i), 5)}"
-                host = HOSTS[i % len(HOSTS)] if kind == "DaemonSet" else HOSTS[(pod_counter + i) % len(HOSTS)]
-                hidx = int(host[0][-1])
-                ip = f"10.128.{hidx * 2}.{10 + pod_counter + i}"
+                host = self.hosts[i % len(self.hosts)] if kind == "DaemonSet" else self.hosts[(pod_counter + i) % len(self.hosts)]
+                seq = 2560 + pod_counter + i
+                ip = f"10.{128 + (seq >> 16)}.{(seq >> 8) & 255}.{seq & 255}" if len(self.hosts) > len(HOSTS) \
+                    else f"10.128.{int(host[0][-1]) * 2}.{10 + pod_counter + i}"
                 uid = _uid(f"pod/{key}/{i}")
                 crash = key == "storefront/search" and i == 2
+                fault = self.faults.get(key) if i == 0 else None
                 status = {
                     "phase": "Running", "podIP": ip, "podIPs": [{"ip": ip}],
                     "conditions": [{"type": "Ready", "status": "False" if crash else "True"}],
@@ -220,6 +290,10 @@ class DemoSource:
                     "spec": pod_spec,
                     "status": status,
                 })
+                if fault in ("crash", "oom", "image", "notready", "pending"):
+                    self._fault(self.objs["pods"][-1], ns, name, pname, fault)
+                elif fault == "slow":
+                    cpu_u = cpu_l * 0.97
                 if crash:
                     self.objs["events"].append({
                         "type": "Warning", "reason": "BackOff", "count": 212, "lastTimestamp": "AGO:45",
@@ -241,6 +315,10 @@ class DemoSource:
                                         {"name": "http", "port": 80, "protocol": "TCP", "targetPort": 80}]
                 svc["status"] = {"loadBalancer": {"ingress": [{"ip": "203.0.113.10"}]}}
             self.objs["services"].append(svc)
+        for ns, name in self.routes:
+            self.objs["routes"].append({"metadata": {"name": name, "namespace": ns},
+                                        "spec": {"host": f"{ns}.apps.acme.example", "to": {"kind": "Service", "name": name},
+                                                 "tls": {"termination": "edge"}}})
         # A Service whose selector matches nothing.
         self.objs["services"].append({"metadata": {"name": "legacy-pricing", "namespace": "storefront"},
                                       "spec": {"type": "ClusterIP", "clusterIP": "172.30.9.9",
@@ -253,7 +331,7 @@ class DemoSource:
         self.objs["routes"].append({"metadata": {"name": "public-api", "namespace": "storefront"},
                                     "spec": {"host": "api.acme.example", "to": {"kind": "Service", "name": "api-gateway"},
                                              "tls": {"termination": "reencrypt"}}})
-        for ns in sorted({w[0] for w in WORKLOADS}):
+        for ns in sorted({w[0] for w in self.workloads}):
             self.objs["namespaces"].append({"metadata": {"name": ns, "labels": {
                 "kubernetes.io/metadata.name": ns, "tier": "data" if ns == "data" else "apps"}}})
         for op in ("authentication", "console", "dns", "etcd", "image-registry", "ingress", "kube-apiserver",
@@ -274,6 +352,35 @@ class DemoSource:
                                   "spec": {"scaleTargetRef": {"kind": "Deployment", "name": "api-gateway"},
                                            "minReplicas": 2, "maxReplicas": 3},
                                   "status": {"currentReplicas": 3, "desiredReplicas": 3}})
+
+    def _fault(self, pod: dict, ns: str, app: str, pname: str, fault: str) -> None:
+        """One broken pod in a synthetic workload, with the events a real cluster would carry."""
+        st = pod["status"]
+        cs = st["containerStatuses"][0]
+        ev = lambda reason, msg, n: self.objs["events"].append({   # noqa: E731
+            "type": "Warning", "reason": reason, "count": n, "lastTimestamp": "AGO:40", "message": msg,
+            "involvedObject": {"kind": "Pod", "namespace": ns, "name": pname}})
+        st["conditions"] = [{"type": "Ready", "status": "False", "lastTransitionTime": "AGO:1500"}]
+        if fault in ("crash", "oom"):
+            oom = fault == "oom"
+            cs.update(restartCount=23, state={"waiting": {"reason": "CrashLoopBackOff"}},
+                      lastState={"terminated": {"reason": "OOMKilled" if oom else "Error", "exitCode": 137 if oom else 1,
+                                                "finishedAt": "RECENT"}})
+            ev("BackOff", f"Back-off restarting failed container {app} in pod {pname}", 140)
+        elif fault == "image":
+            image = pod["spec"]["containers"][0]["image"]
+            st["phase"] = "Pending"
+            cs.update(state={"waiting": {"reason": "ImagePullBackOff", "message": f'Back-off pulling image "{image}"'}})
+            ev("Failed", f'Failed to pull image "{image}": unauthorized: authentication required', 30)
+        elif fault == "notready":
+            ev("Unhealthy", "Readiness probe failed: HTTP probe failed with statuscode: 503", 300)
+        elif fault == "pending":
+            msg = "0/60 nodes are available: 60 Insufficient memory. preemption: 0/60 nodes are available"
+            st.update(phase="Pending", containerStatuses=[])
+            st["conditions"].append({"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": msg})
+            st.pop("podIP", None)
+            st.pop("podIPs", None)
+            pod["spec"]["nodeName"] = ""
 
     # ----------------------------------------------------------------- scenarios
     def calls(self) -> list[tuple]:
@@ -309,7 +416,7 @@ class DemoSource:
                 if term and term.get("finishedAt") == "RECENT":
                     term["finishedAt"] = recent
         for kind in ("replicasets", "events", "jobs", "persistentvolumeclaims", "controllerrevisions", "nodes",
-                     "certificates", "routes", "ingresses"):
+                     "certificates", "routes", "ingresses", "pods"):
             for obj in world.objs[kind]:
                 _stamp(obj)
         snap = {k: v for k, v in world.objs.items()}
@@ -362,7 +469,7 @@ class DemoSource:
         w = self.world
         out = {}
         load = 0.7 + 0.6 * self._wave(90)
-        for src, dst, rps, p50, p95, err, meshed in CALLS:
+        for src, dst, rps, p50, p95, err, meshed in self.mesh_calls:
             if not meshed:
                 continue
             sns, sname = src.split("/")
@@ -423,13 +530,13 @@ class DemoSource:
         from . import __build__, __version__
         dead = sorted(self.world.dead_nodes) if self.world else []
         agents = [{"node": h[0], "version": __version__, "build": __build__, "lastReportS": 4.0 if h[0] not in dead else 300.0}
-                  for h in HOSTS]
-        return {"nodes": len(HOSTS) - len(dead), "known": [h[0] for h in HOSTS], "stale": dead, "agents": agents}
+                  for h in self.hosts]
+        return {"nodes": len(self.hosts) - len(dead), "known": [h[0] for h in self.hosts], "stale": dead, "agents": agents}
 
     def reports(self) -> list[dict]:
         w = self.world
         rng = random.Random(int(time.time() / 10))
-        alive = [h[0] for h in HOSTS if h[0] not in w.dead_nodes]
+        alive = [h[0] for h in self.hosts if h[0] not in w.dead_nodes]
         by_node: dict[str, dict] = {n: {"node": n, "receivedAt": time.time(), "netns": {},
                                         "capabilities": {"sockets": "ss", "conntrack": "demo"}} for n in alive}
         ip_pod = {}

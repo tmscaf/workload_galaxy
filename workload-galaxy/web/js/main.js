@@ -28,6 +28,9 @@ const state = {
   view: VIEW_NAMES.includes(params.get('view')) ? params.get('view') : VIEW_NAMES.includes(loadPref('view', '')) ? loadPref('view', '') : 'galaxy',
   mapView: 'galaxy',
   selection: null,
+  detail: null,       // the selected node fetched from the server, when the page's rolled-up graph doesn't hold it
+  // Units opened in place on a large estate: grp:<business unit>, ns:<project>; oldest first.
+  expand: (params.get('expand') || '').split(',').filter(Boolean),
   graph: null,
   meta: null,
   allNamespaces: [],
@@ -51,6 +54,9 @@ const ui = new UI({
   onOptions(o) { scene.setOptions(o); },
   onClear() { select(null); },
   onScenarios(ids) { applyScenarios(ids); },
+  onExpand(token, open = true) { return setExpand(token, open); },
+  onReveal(sel) { setView(state.view === 'triage' ? state.mapView : state.view); return reveal(sel); },
+  search(q) { return getJSON('api/v1/search?q=' + encodeURIComponent(q)); },
   async fetchLogs(ns, pod, container, previous) {
     const q = new URLSearchParams({ ns, pod, previous: previous ? 'true' : 'false' });
     if (container) q.set('container', container);
@@ -71,8 +77,20 @@ function copyText(text) {
 
 const triage = new Triage(document.getElementById('triage'), {
   onSelect(sel) { select(sel, false); },
-  onShowOnMap(sel) { setView(state.mapView === 'triage' ? 'galaxy' : state.mapView); select(sel, true); },
+  onShowOnMap(sel) { setView(state.mapView === 'triage' ? 'galaxy' : state.mapView); reveal(sel); },
   onProject(ns) { ui.ctx.onNamespaces([ns], state.platform); },
+  scope() { return { namespaces: state.namespaces, platform: state.platform }; },
+  fetchTable(kind, o) {
+    const q = scopeQuery();
+    q.delete('expand');
+    for (const [k, v] of Object.entries(o)) if (v !== '' && v != null) q.set(k, String(v));
+    return getJSON(`api/v1/${kind}?${q}`);
+  },
+  async fetchPattern(key) {
+    const q = scopeQuery();
+    q.set('pattern', key);
+    return { key, ...(await getJSON(`api/v1/triage?${q}`)) };
+  },
   async onPlatformNode(id) {      // platform workloads are outside the default filter: bring them in, then open it
     if (!state.platform) { state.platform = true; savePref('platform', true); ui.setNamespaces(state.allNamespaces, state.namespaces, true); await load(); }
     select({ type: 'node', id }, false);
@@ -94,9 +112,34 @@ async function applyScenarios(ids) {
   }
 }
 
+function scopeQuery() {
+  const q = new URLSearchParams();
+  if (state.namespaces && state.namespaces.length) q.set('ns', state.namespaces.join(','));
+  if (state.platform) q.set('platform', 'true');
+  if (state.expand.length) q.set('expand', state.expand.join(','));
+  return q;
+}
+
+// Open a rolled-up project / business unit in place (or close it again).
+function setExpand(token, open = true) {
+  if (!token) return;
+  const groupOf = new Map(state.allNamespaces.map((n) => [n.name, n.group]));
+  let next = state.expand.filter((x) => x !== token);
+  if (open) next.push(token);
+  else if (token.startsWith('grp:')) next = next.filter((x) => !(x.startsWith('ns:') && groupOf.get(x.slice(3)) === token.slice(4)));
+  state.expand = token === '*' ? [] : next;
+  syncUrl();
+  return load();
+}
+
 const scene = new GalaxyScene(document.getElementById('stage'), document.getElementById('labels'), {
   // In the Gibson view a clicked tower is brought front and center.
   onSelect(hit) { select(hit, state.view === 'gibson'); },
+  onOpen(hit) {
+    const n = state.graph?.nodes.find((x) => x.id === (hit.type === 'pod' ? hit.wid : hit.id));
+    if (hit.type === 'pod' && hit.pod?.pseudo) setExpand(hit.pod.expand || n?.expand);
+    else if (n?.aggregate && n.expand) setExpand(n.expand);
+  },
   onBackground() { select(null); },
   onHover(hit, at) { ui.tooltip(hit, at); },
 });
@@ -132,13 +175,42 @@ function setView(v) {
   syncUrl();
 }
 
-function select(sel, focus) {
+// Show something that is folded into a project or unit on the map: open its project, then select it.
+async function reveal(sel) {
+  const id = sel.type === 'pod' ? sel.wid : sel.id;
+  if (state.graph?.view?.collapsed && !inGraph(id)) {
+    const ns = (id.match(/^(?:wl|entry|svc):([^/]+)\//) || [])[1];
+    if (ns) await setExpand(`ns:${ns}`);
+  }
+  return select(sel, true);
+}
+
+const inGraph = (id) => !!state.graph && (state.graph.nodes.some((n) => n.id === id) || state.graph.edges.some((e) => e.id === id));
+
+async function fetchDetail(id) {
+  const q = scopeQuery();
+  q.set('id', id);
+  return getJSON(`api/v1/node?${q}`);
+}
+
+async function select(sel, focus) {
+  // A child of a rolled-up unit (drawn as a pod of it) stands for a real workload or project.
+  if (sel && sel.type === 'pod' && sel.pod?.pseudo) sel = { type: 'node', id: sel.pod.child };
+  const id = sel && (sel.type === 'pod' ? (sel.wid || sel.key.split('#')[0]) : sel.id);
+  let detail = null;
+  if (id && (sel.type === 'node' || sel.type === 'edge' || sel.type === 'pod') && state.graph && !inGraph(id)) {
+    // Not on the page: the server has it. The drawer shows the real thing; the map highlights what it is drawn as.
+    try { detail = await fetchDetail(id); } catch (err) { ui.toast(`Cannot open ${id}: ${err.message}`); return; }
+  }
   state.selection = sel;
-  scene.setSelection(sel);
-  ui.renderDrawer(sel);
+  state.detail = detail;
+  const drawn = !detail ? sel : detail.at ? { type: detail.at.includes('->') ? 'edge' : 'node', id: detail.at } : null;
+  scene.setSelection(drawn);
+  ui.renderDrawer(sel, false, detail);
+  if (detail) { focus = focus && !!drawn; sel = drawn || sel; }
   document.body.classList.toggle('drawer-open', !document.getElementById('drawer').hidden);
   applyInsets();
-  if (state.graph) ui.renderRail(state.graph, scene.layerCounts(), sel);
+  if (state.graph) ui.renderRail(state.graph, scene.layerCounts(), state.selection);
   if (sel && focus && state.view !== 'triage') {
     if (sel.type === 'node') scene.focus(sel.id);
     else if (sel.type === 'pod') scene.focus(sel.wid || sel.key.split('#')[0]);
@@ -147,7 +219,8 @@ function select(sel, focus) {
     else if (sel.type === 'cascade') scene.resetCamera(false);
   }
   if (!sel) ui.tooltip(null);
-  post({ type: 'select', selection: sel ? { ...sel, node: sel.id ? state.graph?.nodes.find((n) => n.id === sel.id) : undefined } : null });
+  const picked = state.selection;
+  post({ type: 'select', selection: picked ? { ...picked, node: picked.id ? (detail?.nodes.find((n) => n.id === picked.id) || state.graph?.nodes.find((n) => n.id === picked.id)) : undefined } : null });
   syncUrl();
 }
 
@@ -162,9 +235,7 @@ async function getJSON(path) {
 }
 
 async function load() {
-  const q = new URLSearchParams();
-  if (state.namespaces && state.namespaces.length) q.set('ns', state.namespaces.join(','));
-  if (state.platform) q.set('platform', 'true');
+  const q = scopeQuery();
   const token = Symbol('load');
   state.inflight = token;
   try {
@@ -203,8 +274,17 @@ async function load() {
     ui.setNamespaces(state.allNamespaces, state.namespaces, state.platform);
     ui.setMeta(meta, graph);
     scene.setData(graph);
+    // The server may have closed expansions to stay within what one screen can show.
+    if (graph.view) state.expand = graph.view.expanded || [];
     // Keep the selection if it still exists.
-    if (state.selection) {
+    if (state.selection && state.detail) {
+      const s = state.selection;
+      try {
+        state.detail = await fetchDetail(s.type === 'pod' ? (s.wid || s.key.split('#')[0]) : s.id);
+        const at = state.detail.at;
+        scene.setSelection(at ? { type: at.includes('->') ? 'edge' : 'node', id: at } : null);
+      } catch { state.selection = null; state.detail = null; scene.setSelection(null); }
+    } else if (state.selection) {
       const s = state.selection;
       const still = s.type === 'node' ? graph.nodes.some((n) => n.id === s.id)
         : s.type === 'edge' ? graph.edges.some((e) => e.id === s.id)
@@ -218,7 +298,7 @@ async function load() {
     }
     ui.renderRail(graph, scene.layerCounts(), state.selection);
     ui.meta = meta;
-    ui.renderDrawer(state.selection, true);
+    ui.renderDrawer(state.selection, true, state.detail);
     document.body.classList.toggle('drawer-open', !document.getElementById('drawer').hidden);
     ui.setTriageBadge(Triage.badge(graph));
     if (state.view === 'triage') triage.render(graph, meta);
@@ -245,6 +325,7 @@ function syncUrl() {
   if (state.platform) q.set('platform', '1'); else q.delete('platform');
   if (state.view !== 'galaxy') q.set('view', state.view); else q.delete('view');
   if (state.selection && state.selection.type === 'node') q.set('select', state.selection.id); else q.delete('select');
+  if (state.expand.length) q.set('expand', state.expand.join(',')); else q.delete('expand');
   if (state.scenarios && state.scenarios.active.length) q.set('scenario', state.scenarios.active.join(',')); else q.delete('scenario');
   const s = q.toString();
   history.replaceState(null, '', location.pathname + (s ? '?' + s : ''));

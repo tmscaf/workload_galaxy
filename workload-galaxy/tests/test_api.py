@@ -84,3 +84,19 @@ def test_showcase_presets_only_name_real_scenarios():
         assert p["title"] and p["summary"] and set(p["scenarios"]) <= set(SCENARIOS)
     with TestClient(main.app) as c:
         assert [p["id"] for p in c.get("/api/v1/demo/scenarios").json()["presets"]] == [p["id"] for p in PRESETS]
+
+
+def test_scale_endpoints_serve_a_small_cluster_too():
+    with TestClient(main.app) as c:
+        main.state.refresh_once()
+        topo = c.get("/api/v1/topology").json()
+        assert topo["view"]["level"] == "workloads" and "_scoped" not in topo and topo["summary"]["problems"] >= 4
+        assert c.get("/api/v1/topology", headers={"Accept-Encoding": "gzip"}).headers.get("content-encoding") == "gzip"
+        rows = c.get("/api/v1/workloads?problems=true&sort=name&desc=false").json()
+        assert rows["total"] >= 3 and rows["rows"][0]["name"] <= rows["rows"][-1]["name"]
+        assert c.get("/api/v1/calls?limit=5").json()["rows"]
+        wid = "wl:payments/Deployment/fraud-check"
+        d = c.get(f"/api/v1/node?id={wid}").json()
+        assert d["at"] == wid and d["nodes"][0]["id"] == wid and d["edges"]
+        assert c.get("/api/v1/node?id=wl:none/Deployment/x").status_code == 404
+        assert c.get("/api/v1/search?q=fraud").json()["hits"][0]["name"] == "fraud-check"

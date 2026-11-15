@@ -353,7 +353,11 @@ export class GalaxyScene {
     this._sweepLabels();
     this._applyHighlight();
     this.positionsDirty = true;
+    // Opening or closing a unit changes the size of the map: frame the new one.
+    const zoomKey = `${graph.view?.level || ''}|${(graph.view?.expanded || []).join(',')}`;
     if (first) this.resetCamera(true);
+    else if (zoomKey !== this._zoomKey) this.resetCamera(false);
+    this._zoomKey = zoomKey;
   }
 
   // Safety net: any label element in the page that no longer belongs to a scene object is removed,
@@ -422,6 +426,8 @@ export class GalaxyScene {
       color = lvlColor ? lvlColor.clone() : base.lerp(C.white, 0.35);
       if (n.idle) color = C.idle.clone();
       size = 9 + 4.2 * Math.sqrt(Math.max(1, n.pods.length));
+      // A whole project or business unit: bigger with what it holds (log scale: 10 vs 1,000 workloads).
+      if (n.aggregate) size = 12 + 2.6 * Math.log2(1 + n.counts.workloads);
     } else if (n.kind === 'clients') {   // users on your network: smaller and green, like the rest of your LAN
       color = n.scope === 'lan' ? C.lan.clone().lerp(C.white, 0.45) : C.clients.clone();
       size = n.scope === 'lan' ? 20 : 30;
@@ -463,7 +469,10 @@ export class GalaxyScene {
     }
     obj.pulse = lvl === 'critical';
     const ro = n.rollout && { progressing: 'rolling out', stuck: 'rollout stuck', failed: 'rollout failed' }[n.rollout.state];
-    const metric = n.kind !== 'host' ? [ro, nodeMetric(n, this.inbound.get(n.id))].filter(Boolean).join(' · ')
+    const k = n.counts;
+    const metric = n.aggregate && n.kind !== 'host'
+      ? [n.aggregate === 'unit' ? `${k.projects} projects` : '', `${k.workloads} workload${k.workloads === 1 ? '' : 's'}`, k.failing ? `${k.failing} failing` : 'all healthy'].filter(Boolean).join(' · ')
+      : n.kind !== 'host' ? [ro, nodeMetric(n, this.inbound.get(n.id))].filter(Boolean).join(' · ')
       : n.pseudo ? `${n.podCount} pod${n.podCount === 1 ? '' : 's'} waiting for a node`
       : [`${n.podCount} pods`, n.memRequestRatio != null ? `mem ${Math.round(n.memRequestRatio * 100)}% reserved` : '',
         n.cpuRatio != null ? `cpu ${Math.round(n.cpuRatio * 100)}%` : ''].filter(Boolean).join(' · ');
@@ -907,6 +916,22 @@ export class GalaxyScene {
     const T = (t, c = dim, sz = 13, w = 600) => out.push({ t, c, s: sz, w });
     const H = (t) => out.push({ t, c: ink, s: 12, w: 700, gap: 9, rule: true });
     const r = n.risk || {};
+    if (n.aggregate) {        // a project or business unit: what it holds and what is wrong inside
+      const k = n.counts;
+      T(n.name.toUpperCase(), ink, 18, 700);
+      T(n.aggregate === 'unit' ? `BUSINESS UNIT · ${k.projects} PROJECTS` : `PROJECT · ${n.group}`);
+      T(`WORKLOADS ${k.workloads} · PODS ${k.pods}`);
+      T(`HEALTHY ${k.healthy} · DEGRADED ${k.degraded} · DOWN ${k.down}`, k.down ? bad : k.degraded ? warn : dim);
+      for (const x of r.reasons || []) out.push({ card: x.weight >= 0.6 ? 'critical' : 'warning', title: x.weight >= 0.6 ? 'ERROR' : 'WARNING', t: x.text });
+      H(n.aggregate === 'unit' ? `PROJECTS ${n.childrenTotal}` : `WORKLOADS ${n.childrenTotal}`);
+      for (const c of n.children.slice(0, 40)) {
+        T(`${c.name} ${c.ready || ''}`, colorFor(c.level));
+        if (c.issue) T(`  ! ${c.issue}`, colorFor(c.level), 12, 500);
+      }
+      if (n.childrenTotal > 40) T(`+${n.childrenTotal - 40} more`, faint, 12, 500);
+      T('DOUBLE-CLICK TO OPEN', faint, 12, 600);
+      return out;
+    }
     T(n.name.toUpperCase(), ink, 18, 700);
     T(`${n.namespace} · ${n.subkind}`);
     T(`REPLICAS ${n.replicas.ready}/${n.replicas.desired}${n.hpa ? ` · HPA ${n.hpa.min}-${n.hpa.max}` : ''}${n.idle ? ' · SCALED TO 0' : ''}`,
@@ -1253,7 +1278,9 @@ export class GalaxyScene {
       return;
     }
     const target = obj.pos.clone();
-    const dist = Math.max(90, Math.min(220, cur * 0.6));
+    // Close enough to read the node and its neighbours, never so close that a large map becomes a blur.
+    const ext = this.layout ? this.layout.extent : 200;
+    const dist = Math.max(90, Math.min(Math.max(220, ext * 0.8), cur * 0.6));
     this._flyTo(target.clone().add(dir.multiplyScalar(dist)), target, 0.9);
   }
 
@@ -1376,7 +1403,8 @@ export class GalaxyScene {
       const hit = this._pick();
       if (hit) this.cb.onSelect?.(hit); else this.cb.onBackground?.();
     });
-    el.addEventListener('dblclick', () => { if (!this._pick()) this.resetCamera(false); });
+    // Double-click: open a rolled-up project or business unit in place; on empty space, reset the camera.
+    el.addEventListener('dblclick', () => { const hit = this._pick(); if (hit) this.cb.onOpen?.(hit); else this.resetCamera(false); });
   }
 
   _pick() {
@@ -1577,7 +1605,9 @@ export class GalaxyScene {
 
     if (this.composer && W.t > 0.02) {
       // Less bloom while reading a focused tower, so the glow doesn't blur its text.
-      this.bloom.strength = 0.6 * W.t * (this.focusTowerId ? 0.3 : 1);
+      // ...and less when the city is dense: dozens of glass towers side by side add up to a white-out.
+      const dense = Math.min(1, 45 / Math.max(1, this.towers ? this.towers.size : 1));
+      this.bloom.strength = 0.6 * W.t * (this.focusTowerId ? 0.3 : 1) * (0.35 + 0.65 * dense);
       this.composer.render();
     } else {
       this.renderer.render(this.scene, this.camera);
@@ -1617,7 +1647,8 @@ export class GalaxyScene {
       e.p1.y += W.g * dist * 0.16 + W.s * (dist * (0.16 + (bothOnPlane ? 0.32 : 0.05)) + 4) + W.c * dist * 0.04;
       e.p1.z += W.c * (dist * (backward ? 0.55 : 0.18) + 6);
       e.len = Math.max(1, dist * 1.15) * (1 - W.t) + (e.routeLen || dist) * W.t;
-      const visible = this.opts.inferred || !e.inferredOnly;
+      // Minor bundles (healthy, little traffic, on a large estate) only show for what is selected.
+      const visible = (this.opts.inferred || !e.inferredOnly) && !(e.data.minor && !(hi && hi.edges.has(e.data.id)));
       const inHi = !hi || hi.edges.has(e.data.id);
       const base = e.inferredOnly ? 0.22 : e.idle ? 0.13 : 0.18 + 0.35 * e.level + (e.lvl !== 'ok' ? 0.25 : 0);
       const alpha = visible ? base * (inHi ? (hi ? 1.6 : 1) : 0.05) : 0;
@@ -1742,6 +1773,7 @@ export class GalaxyScene {
       if (!this.opts.inferred && e.inferredOnly) continue;
       const inHi = !hi || hi.edges.has(e.data.id);
       if (hi && !inHi) continue;
+      if (e.data.minor && !hi) continue;
       const quiet = e.inferredOnly || e.idle;
       const speed = (14 + 46 * e.level) * e.slow * (quiet ? 0.35 : 1);
       const step = (speed * dt) / e.len;

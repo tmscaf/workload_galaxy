@@ -65,6 +65,8 @@ class World:
         self.blocked: set[tuple[str, str]] = set()  # (caller or "*", callee): connections never get through
         self.guides: dict[str, dict] = {}
         self._ip = 180
+        self._pod_index: dict[str, list[dict]] | None = None
+        self._pod_count = -1
 
     # ------------------------------------------------------------ lookups
     def node(self, name: str) -> dict:
@@ -78,9 +80,14 @@ class World:
         return f"{pod['metadata']['namespace']}/{pod['metadata']['labels'].get('app')}"
 
     def pods_of(self, key: str) -> list[dict]:
-        ns, app = key.split("/")
-        return [p for p in self.objs["pods"] if p["metadata"]["namespace"] == ns
-                and p["metadata"]["labels"].get("app") == app]
+        # Indexed: the demo asks this once per call and per service, which is quadratic at scale.
+        if self._pod_index is None or self._pod_count != len(self.objs["pods"]):
+            self._pod_index = {}
+            for p in self.objs["pods"]:
+                k = f"{p['metadata']['namespace']}/{p['metadata']['labels'].get('app')}"
+                self._pod_index.setdefault(k, []).append(p)
+            self._pod_count = len(self.objs["pods"])
+        return list(self._pod_index.get(key, ()))
 
     def pods_on(self, node: str) -> list[dict]:
         return [p for p in self.objs["pods"] if p["spec"].get("nodeName") == node

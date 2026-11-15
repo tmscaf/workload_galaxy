@@ -29,7 +29,6 @@ from .util import controller_ref, labels_of, meta, name_of, ns_of, parse_cpu, pa
 
 IMAGE_REASONS = {"ImagePullBackOff", "ErrImagePull", "InvalidImageName", "ErrImageNeverPull", "ImageInspectError"}
 CONFIG_REASONS = {"CreateContainerConfigError", "CreateContainerError", "RunContainerError", "StartError"}
-MAX_FINDINGS = 400
 MAX_CHANGES = 80
 SEV_RANK = {"critical": 0, "warning": 1, "info": 2}
 
@@ -117,7 +116,7 @@ class Diagnoser:
             severity: str | None = None, weight: float | None = None, detail: str = "", cause: str = "",
             fix: str = "", commands: list[str] | tuple = (), pods: list[str] | tuple = (),
             evidence: list[str] | tuple = (), since_s: int | None = None, covers: tuple = (),
-            risk_category: str | None = None) -> dict | None:
+            risk_category: str | None = None, pattern: str | None = None, label: str | None = None) -> dict | None:
         node = self.b.nodes.get(subject)
         edge = self.edge_by_id.get(subject)
         if edge:
@@ -142,7 +141,9 @@ class Diagnoser:
              "subjectKind": kind, "subjectName": name, "namespace": ns, "platform": platform, "pods": list(pods)[:6],
              "podCount": len(pods), "detail": detail, "cause": cause, "fix": fix, "commands": list(commands)[:4],
              "evidence": [e[:500] for e in evidence if e][:4], "sinceS": since_s, "root": True, "causedBy": None,
-             "causedByName": None, "blast": 0, "userFacing": False, "weight": round(weight or 0, 3)}
+             "causedByName": None, "blast": 0, "userFacing": False, "weight": round(weight or 0, 3),
+             # The kind of problem, whoever has it: lets one cause across many workloads be shown once.
+             "pattern": pattern or key.split(":", 1)[0], "patternLabel": label or A.PATTERN_LABELS.get(pattern or key.split(":", 1)[0], "")}
         self.findings[fid] = f
         if weight and (node or edge):
             (node or edge).setdefault("diag", []).append(
@@ -328,6 +329,7 @@ class Diagnoser:
                 or prog.get("message", "") or "The new pods never became ready."
             self.add(
                 "rollout", wid, f"Rollout {state}: {new_ready}/{desired} new pods ready after {dur(age)}",
+                pattern="rollout", label="rollout stuck or failed",
                 subject=wid, weight=0.65 if serving else 0.85, since_s=age,
                 detail=(f"Revision {rev(new)}. " if rev(new) else "") + (f"Changed: {'; '.join(changes[:5])}." if changes else ""),
                 cause=why + ("" if not blocked else " — see the finding for those pods."),
@@ -445,6 +447,7 @@ class Diagnoser:
             elif "security" in what and self.openshift:
                 commands.insert(0, f"oc -n {ns} get {self.ref(n)} -o yaml | oc adm policy scc-subject-review -f -")
             self.add(category, f"create:{wid}", f"Can't create pods: {what}", subject=wid,
+                     pattern=f"create:{what}", label=f"can't create pods: {what}",
                      weight=0.6 if ready else 0.85, cause=cause, fix=fix, commands=commands, evidence=[msg],
                      since_s=(ev or {}).get("ageS"), covers=("replicas",), risk_category="availability")
 
@@ -465,7 +468,9 @@ class Diagnoser:
                 d, pods = g["data"], g["pods"]
                 count = len(pods)
                 noun = f"{count} pod{'s' if count > 1 else ''}"
+                klass = d.get("klass") or _generic(d["what"])
                 self.add(d["category"], f"{kind}:{wid}:{sig}"[:200], f"{noun} {d['what']}", subject=wid, pods=pods,
+                         pattern=f"{kind}:{klass}", label=klass,
                          severity=d.get("severity", "critical"), cause=d["cause"], fix=d["fix"],
                          commands=[c.replace("{pod}", pods[0]) for c in d.get("commands", [])],
                          evidence=d.get("evidence", []), since_s=d.get("since"), detail=d.get("detail", ""),
@@ -490,6 +495,7 @@ class Diagnoser:
                 req.append(f"memory {p['memRequest'] / 1024 ** 2:.0f}Mi")
             return [("sched", what, {
                 "category": "scheduling", "what": f"can't be scheduled: {what}", "cause": cause, "fix": fix,
+                "klass": f"can't be scheduled: {what}",
                 "detail": f"Each pod requests {', '.join(req)}." if req else "", "evidence": [p["message"]],
                 "since": p.get("ageSeconds"), "covers": ("unschedulable", "pod:Unschedulable", "replicas"),
                 "commands": [describe, self.cmd("{cli} describe nodes | grep -A6 'Allocated resources'")]})]
@@ -503,6 +509,7 @@ class Diagnoser:
             what, cause, fix = A.image_advice(f"{c['reason']} {msg} {c['message']}")
             return [("image", c["image"], {
                 "category": "image", "what": f"can't pull {_short_image(c['image'])}: {what}", "cause": cause, "fix": fix,
+                "klass": f"can't pull their image: {what}",
                 "detail": f"Image: {c['image']}", "evidence": [msg], "since": p.get("ageSeconds"),
                 "covers": tuple(f"pod:{r}" for r in IMAGE_REASONS) + ("replicas",),
                 "commands": [describe, self.cmd("{cli} -n {ns} get pod {{pod}} -o jsonpath='{{.spec.imagePullSecrets}}'",
@@ -533,6 +540,7 @@ class Diagnoser:
                 cause, fix = A.probe_advice("liveness", live["message"], listening, self._probe_port(n, "livenessProbe"))
                 out.append(("liveness", crash["name"], {
                     "category": "probes", "what": "restarted by a failing liveness probe",
+                    "klass": "restarted by a failing liveness probe",
                     "cause": "The kubelet kills the container because its liveness probe fails. " + cause, "fix": fix,
                     "evidence": [live["message"]], "since": last.get("ageS"),
                     "detail": f"Container {crash['name']} · {crash['restarts']} restarts.",
@@ -545,6 +553,7 @@ class Diagnoser:
                 init = "init container " if crash["init"] else ""
                 out.append(("crash", f"{crash['name']}:{what}", {
                     "category": "crash", "what": f"crash-looping: {init}{crash['name']} {what}",
+                    "klass": f"crash-looping: {what}",
                     "cause": cause + (" Because it is an init container, the main containers never start." if crash["init"] else ""),
                     "fix": fix, "evidence": [last.get("message") or crash["message"]], "since": last.get("ageS"),
                     "detail": f"{crash['restarts']} restarts" + (f", last {dur(last.get('ageS'))} ago" if last.get("ageS") is not None else "") + ".",
@@ -571,6 +580,7 @@ class Diagnoser:
                 category, what, cause, fix = A.mount_advice((ev or {}).get("reason", ""), (ev or {}).get("message", ""))
                 out.append(("creating", what, {
                     "category": category, "what": f"stuck in ContainerCreating for {dur(age)}: {what}", "cause": cause,
+                    "klass": f"stuck in ContainerCreating: {what}",
                     "fix": fix, "evidence": [(ev or {}).get("message", "")], "since": age, "covers": ("replicas",),
                     "commands": [describe]}))
             return out
@@ -587,6 +597,7 @@ class Diagnoser:
                 out.append(("notready", sig, {
                     "category": "probes", "severity": "critical" if n["replicas"]["ready"] == 0 else "warning",
                     "what": f"running but failing the {kind} probe for {dur(p['notReadyS'])}",
+                    "klass": f"running but failing the {kind} probe",
                     "cause": cause + " A pod that isn't ready gets no traffic from its Service.", "fix": fix,
                     "evidence": [ev["message"]], "since": p["notReadyS"], "covers": ("replicas",),
                     "commands": [describe, logs((cs[0]["name"] if cs else pod), False)]}))
@@ -594,7 +605,7 @@ class Diagnoser:
                 waiting = [f"{c['name']} ({c['reason'] or c['state']})" for c in cs if not c["ready"] and not c["init"]]
                 out.append(("notready", "noprobe", {
                     "category": "availability", "severity": "critical" if n["replicas"]["ready"] == 0 else "warning",
-                    "what": f"running but not ready for {dur(p['notReadyS'])}",
+                    "what": f"running but not ready for {dur(p['notReadyS'])}", "klass": "running but not ready",
                     "cause": "Containers not ready: " + (", ".join(waiting) or "unknown") + ".",
                     "fix": "Describe the pod for its conditions and events.", "since": p["notReadyS"],
                     "covers": ("replicas",), "commands": [describe]}))
@@ -603,6 +614,7 @@ class Diagnoser:
         if (p.get("deletingS") or 0) > 300:
             out.append(("terminating", "x", {
                 "category": "availability", "severity": "warning", "what": f"stuck terminating for {dur(p['deletingS'])}",
+                "klass": "stuck terminating",
                 "cause": "The pod was deleted but can't finish: a finalizer is pending, a container ignores SIGTERM, "
                          "or its node is unreachable so the kubelet never confirms.",
                 "fix": "Check the pod's finalizers and its node. Force-delete only if the node is really gone.",
@@ -1127,6 +1139,7 @@ class Diagnoser:
     # ------------------------------------------------------------------ pass 2 (after scoring)
     def finish(self, graph: dict) -> None:
         nodes = {n["id"]: n for n in graph["nodes"]}
+        explained_subjects = {f["subject"] for f in self.findings.values() if f["severity"] != "info"}
         for n in graph["nodes"]:
             risk = n.get("risk") or {}
             if n["kind"] == "host":
@@ -1140,6 +1153,7 @@ class Diagnoser:
                     evs = [e["message"] for e in n.get("events") or []][:2]
                     sev = "info" if r["code"] in A.HOST_INFO else "critical" if r["weight"] >= 0.6 else "warning"
                     f = self.add("node", f"{r['code']}:{n['id']}", f"Node {n['name']}: {r['text']}", subject=n["id"],
+                                 pattern=f"node:{r['code']}",
                                  severity=sev, cause=cause, fix=fix,
                                  commands=[self.cmd(c, name=n["name"]) for c in cmds], evidence=evs)
                     if f:
@@ -1147,7 +1161,7 @@ class Diagnoser:
                 continue
             if n["kind"] != "workload":
                 continue
-            explained = any(f["subject"] == n["id"] and f["severity"] != "info" for f in self.findings.values())
+            explained = n["id"] in explained_subjects
             for r in risk.get("reasons", []):
                 code = r.get("code", "")
                 if code == "diag" or (n["id"], code) in self.covered or r["weight"] < 0.2:
@@ -1158,7 +1172,7 @@ class Diagnoser:
                 if not key:
                     continue
                 category, cause, fix, cmds, sev = A.WORKLOAD[key]
-                f = self.add(category, f"{code}:{n['id']}", r["text"], subject=n["id"], severity=sev,
+                f = self.add(category, f"{code}:{n['id']}", r["text"], subject=n["id"], severity=sev, pattern=f"wl:{key}",
                              weight=None, cause=cause, fix=fix,
                              commands=[self.cmd(c, ns=n["namespace"], name=n["name"], ref=self.ref(n)) for c in cmds])
                 if f and not sev:
@@ -1178,6 +1192,7 @@ class Diagnoser:
                 category, cause, fix = A.EDGE[code]
                 info = code in A.EDGE_INFO
                 f = self.add(category, f"{code}:{e['id']}", f"{s['name']} → {t['name']}: {r['text']}", subject=e["id"],
+                             pattern=f"call:{code}",
                              severity="info" if info else ("critical" if r["weight"] >= 0.6 else "warning"),
                              cause=cause, fix=fix)
                 if not f or info:
@@ -1229,9 +1244,9 @@ class Diagnoser:
                 if f["root"] and f["severity"] != "info":
                     f["blast"], f["userFacing"] = c["count"], c["userFacing"]
 
-        out = sorted(self.findings.values(), key=lambda f: (
+        # The whole list stays server-side; each response carries the part its scope needs (see summarize()).
+        graph["findings"] = sorted(self.findings.values(), key=lambda f: (
             SEV_RANK[f["severity"]], not f["root"], -int(f["userFacing"]), -f["blast"], -f["weight"], f["title"]))
-        graph["findings"] = out[:MAX_FINDINGS]
         graph["changes"] = self._changes(graph)
         graph["platform"] = self._platform_summary(graph)
 
@@ -1290,6 +1305,70 @@ class Diagnoser:
                           "pressure": sorted({p for h in hosts for p in h.get("pressure") or []}),
                           "cordoned": sum(1 for h in hosts if h.get("unschedulable"))},
                 "cli": self.cli}
+
+
+def _generic(text: str) -> str:
+    """A finding's wording with the specifics taken out, so the same problem groups across workloads."""
+    text = re.sub(r'"[^"]*"|\S*[0-9_/]\S*|\b[a-z0-9]+(?:-[a-z0-9]+)+\b', "", text)
+    return re.sub(r"\s+([:,.])", r"\1", re.sub(r"\s{2,}", " ", text)).strip(" :,")
+
+
+PATTERN_MIN = 4          # this many subjects with the same problem make it a fleet pattern
+RESPONSE_FINDINGS = 300  # findings sent per response; the rest are reachable by narrowing the scope
+
+
+def summarize(findings: list[dict], *, pattern: str | None = None, limit: int = RESPONSE_FINDINGS) -> dict:
+    """What one response carries out of a (scoped) findings list: totals, fleet patterns, and the most
+    severe findings that are not part of a pattern. With `pattern`, that pattern's members instead."""
+    causes = [f for f in findings if f["root"] and not f.get("effectOf")]
+    by_pattern: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for f in causes:
+        by_pattern[(f["category"], f["pattern"])].append(f)
+    patterns, member_subjects = [], set()
+    for (category, key), fs in by_pattern.items():
+        subjects = {f["subject"] or f["id"] for f in fs}
+        if len(subjects) < PATTERN_MIN:
+            continue
+        worst = fs[0]                                   # findings arrive sorted: most severe first
+        pkey = f"{category}|{key}"
+        if worst["severity"] != "info":
+            member_subjects |= {f["subject"] for f in fs if f["subject"]}
+        groups = Counter((f["namespace"] or "cluster").split("-")[0] for f in fs)
+        patterns.append({
+            "key": pkey, "category": category, "severity": worst["severity"],
+            "label": worst.get("patternLabel") or _generic(worst["title"]) or worst["title"],
+            "count": len(subjects), "projects": len({f["namespace"] for f in fs if f["namespace"]}),
+            "units": [{"name": g, "count": c} for g, c in groups.most_common(4)],
+            "userFacing": sum(1 for f in fs if f["userFacing"]), "cause": worst["cause"], "fix": worst["fix"],
+            "kind": worst["subjectKind"] or "project",
+            "examples": [{"id": f["id"], "subject": f["subject"], "subjectName": f["subjectName"],
+                          "namespace": f["namespace"], "title": f["title"]} for f in fs[:5]]})
+        for f in fs:
+            f["_pattern"] = pkey
+    patterns.sort(key=lambda p: (SEV_RANK[p["severity"]], -p["count"]))
+    real = [f for f in causes if f["severity"] != "info"]
+    counts = {k: sum(1 for f in findings if f["severity"] == k) for k in SEV_RANK}
+    summary = {
+        "findings": len(findings), **counts,
+        "problems": len({f["subject"] or f["id"] for f in real}),
+        "problemsCritical": len({f["subject"] or f["id"] for f in real if f["severity"] == "critical"}),
+        "projects": len({f["namespace"] for f in real if f["namespace"]}),
+        "userFacing": len({f["subject"] or f["id"] for f in real if f["userFacing"]})}
+    if pattern:
+        subjects = {f["subject"] for f in causes if f.get("_pattern") == pattern}
+        chosen = [f for f in findings if f.get("_pattern") == pattern
+                  or (f["subject"] in subjects and f["subject"]) or f.get("causedBy") in subjects]
+    else:
+        # Members of a fleet pattern (and the symptoms they cause) are represented by the pattern.
+        fleet = {p["key"] for p in patterns}
+        chosen = [f for f in findings if f.get("_pattern") not in fleet
+                  and not (f["subject"] in member_subjects and f["severity"] != "info" and f.get("effectOf"))
+                  and f.get("causedBy") not in member_subjects]
+    out = [{k: v for k, v in f.items() if k != "_pattern"} for f in chosen[:limit]]
+    for f in findings:
+        f.pop("_pattern", None)
+    return {"findings": out, "patterns": patterns, "summary": summary, "findingsShown": len(out),
+            "findingsMatching": len(chosen)}
 
 
 def _platform_ns(ns: str) -> bool:

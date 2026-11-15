@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import inference
-from .diagnose import Diagnoser
+from .diagnose import Diagnoser, summarize
 from .flows import FlowStats, Observations, aggregate
 from .probes import ProbeResult
 from .prom import MeshEdge
@@ -126,7 +126,7 @@ class Builder:
                  probes: tuple[dict, dict] | None = None, ext_dns: dict[str, str] | None = None,
                  hidden_namespaces: set[str] | None = None, sources: dict | None = None,
                  flow_idle_seconds: float = 60, internal_cidrs: list[str] | None = None,
-                 event_window_seconds: float = 3600):
+                 event_window_seconds: float = 3600, group_by: str = "prefix", group_separator: str = "-"):
         self.snap = snap
         self.reports = reports or []
         self.mesh = mesh or {}
@@ -136,6 +136,7 @@ class Builder:
         self.sources = sources or {}
         self.flow_idle_seconds = flow_idle_seconds
         self.event_window_seconds = event_window_seconds
+        self.group_by, self.group_separator = group_by, group_separator
         self.internal_nets = list(INTERNAL_NETS)
         for cidr in internal_cidrs or []:
             try:
@@ -166,6 +167,7 @@ class Builder:
         self._classify_externals()
         edges = self._finalize_edges()
         self._drop_hidden(edges)
+        self._groups()
         diag = Diagnoser(self, edges, event_window_seconds=self.event_window_seconds)
         diag.run()
         graph = {
@@ -1104,13 +1106,36 @@ class Builder:
             del self.nodes[nid]
         edges[:] = [e for e in edges if e["source"] not in gone and e["target"] not in gone]
 
+    def _groups(self) -> None:
+        """Business unit of every namespace: how projects roll up when there are too many to draw."""
+        ns_labels = {name_of(o): labels_of(o) for o in self.snap.get("namespaces") or []}
+        self.ns_group: dict[str, str] = {}
+
+        def group(ns: str) -> str:
+            if ns not in self.ns_group:
+                if PLATFORM_NS.match(ns):
+                    g = "platform"
+                elif self.group_by.startswith("label:"):
+                    g = ns_labels.get(ns, {}).get(self.group_by[6:]) or "unlabelled"
+                elif self.group_by == "none":
+                    g = ns
+                else:
+                    g = ns.split(self.group_separator, 1)[0] or ns
+                self.ns_group[ns] = g
+            return self.ns_group[ns]
+
+        for n in self.nodes.values():
+            if n.get("namespace"):
+                n["group"] = group(n["namespace"])
+
     def _namespace_summary(self, graph: dict) -> list[dict]:
         """Per-project scorecard: what is running, what is healthy, and the worst thing wrong."""
         out: dict[str, dict] = {}
 
         def row(ns: str) -> dict:
             return out.setdefault(ns, {
-                "name": ns, "platform": bool(PLATFORM_NS.match(ns)), "workloads": 0, "pods": 0, "warning": 0,
+                "name": ns, "group": self.ns_group.get(ns, ns), "platform": bool(PLATFORM_NS.match(ns)),
+                "workloads": 0, "pods": 0, "warning": 0,
                 "critical": 0, "healthy": 0, "degraded": 0, "down": 0, "podsReady": 0, "restarts1h": 0,
                 "rolling": 0, "findings": {"critical": 0, "warning": 0, "info": 0}, "top": None, "quota": None})
 
@@ -1167,7 +1192,7 @@ def public(graph: dict) -> dict:
     return graph
 
 
-def filter_graph(graph: dict, namespaces: list[str] | None, include_platform: bool) -> dict:
+def filter_graph(graph: dict, namespaces: list[str] | None, include_platform: bool, pattern: str | None = None) -> dict:
     """Restrict to some namespaces, keeping one-hop neighbours outside them as 'ghost' nodes."""
     nodes = {n["id"]: n for n in graph["nodes"]}
 
@@ -1228,9 +1253,11 @@ def filter_graph(graph: dict, namespaces: list[str] | None, include_platform: bo
 
     # Findings: everything in the selected projects, plus cluster-level ones (nodes, platform), which
     # explain project symptoms whatever the filter.
-    out["findings"] = [f for f in graph.get("findings", [])
-                       if (f["namespace"] and ns_in_scope(f["namespace"], f["platform"]))
-                       or (not f["namespace"] and (f["category"] in ("node", "platform") or f["subject"] in keep_ids))]
+    scoped = [f for f in graph.get("findings", [])
+              if (f["namespace"] and ns_in_scope(f["namespace"], f["platform"]))
+              or (not f["namespace"] and (f["category"] in ("node", "platform") or f["subject"] in keep_ids))]
+    out.update(summarize(scoped, pattern=pattern))
+    out["_scoped"] = scoped          # for scale.collapse(); never serialized (see main._view)
     out["changes"] = [c for c in graph.get("changes", [])
                       if (c["namespace"] and ns_in_scope(c["namespace"], bool(PLATFORM_NS.match(c["namespace"]))))
                       or (not c["namespace"])]

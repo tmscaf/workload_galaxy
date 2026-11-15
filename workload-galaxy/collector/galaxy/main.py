@@ -24,12 +24,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, Request
 import mimetypes
 
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import __build__, __version__
 from .config import load_settings
 from .state import GalaxyState
+from .scale import collapse
 from .topology import filter_graph
 
 settings = load_settings()
@@ -51,6 +53,24 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Workload Galaxy", version=__version__, lifespan=lifespan,
               docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None)
+app.add_middleware(GZipMiddleware, minimum_size=2048)      # JSON compresses ~10x; large estates need it
+
+
+def _view(ns: str | None, platform: bool, expand: str | None = None, level: str = "auto", pattern: str | None = None):
+    """-> (graph for one screen, {real node id: id it is drawn as}); cached per refresh."""
+    _graph_or_503()
+    names = tuple(_ns(ns) or ())
+    exp = tuple(x for x in (expand or "").split(",") if x)
+
+    def build():
+        full = _graph_or_503()
+        graph, cmap = collapse(filter_graph(full, list(names) or None, platform, pattern), expand=list(exp), level=level,
+                               detail_limit=settings.detail_limit, project_limit=settings.project_limit,
+                               budget=settings.node_budget)
+        graph.pop("_scoped", None)
+        return graph, cmap
+
+    return state.view((names, platform, exp, level, pattern), build)
 
 
 def _graph_or_503() -> dict:
@@ -104,33 +124,79 @@ def namespaces():
 
 @app.get("/api/v1/topology")
 def topology(ns: str | None = Query(None, description="comma-separated namespaces/projects"),
-             platform: bool = Query(False, description="include platform namespaces (kube-*, openshift-*, cattle-*)")):
-    graph = _graph_or_503()
-    return filter_graph(graph, _ns(ns), platform)
+             platform: bool = Query(False, description="include platform namespaces (kube-*, openshift-*, cattle-*)"),
+             expand: str | None = Query(None, description="units shown in detail: grp:<unit>,ns:<project>, oldest first"),
+             level: str = Query("auto", description="auto | workloads | projects | units")):
+    """The graph for one screen. Large estates come back rolled up by project or business unit
+    (`view` says how); `expand` opens units in place. Small ones are returned in full."""
+    return _view(ns, platform, expand, level)[0]
+
+
+@app.get("/api/v1/node")
+def node(id: str, ns: str | None = None, platform: bool = False, expand: str | None = None):
+    """One workload, host or call from the full graph, with its neighbours, calls and findings, plus
+    `at`: the id it is drawn as in the view the caller is looking at."""
+    detail = state.index().detail(id) if _graph_or_503() else None
+    if not detail:
+        raise HTTPException(404, detail="unknown node")
+    cmap = _view(ns, platform, expand)[1]
+    src, _, dst = id.partition("->")
+    at = cmap.get(id) or (f"{cmap.get(src)}->{cmap.get(dst)}" if dst and cmap.get(src) != cmap.get(dst) else cmap.get(src))
+    return {**detail, "at": at}
+
+
+def _page(rows, ns, platform, q, sort, desc, offset, limit, problems):
+    return state.index().page(rows, namespaces=_ns(ns), platform=platform, q=q or "", sort=sort, desc=desc,
+                              offset=max(0, offset), limit=max(1, min(500, limit)), only_problems=problems)
+
+
+@app.get("/api/v1/workloads")
+def workloads(ns: str | None = None, platform: bool = False, q: str | None = None, sort: str = "risk",
+              desc: bool = True, offset: int = 0, limit: int = 100, problems: bool = False):
+    """Every workload as a table row, filtered, sorted and paged on the server."""
+    _graph_or_503()
+    return _page(state.index().workload_rows(), ns, platform, q, sort, desc, offset, limit, problems)
+
+
+@app.get("/api/v1/calls")
+def calls(ns: str | None = None, platform: bool = False, q: str | None = None, sort: str = "risk",
+          desc: bool = True, offset: int = 0, limit: int = 100, problems: bool = False):
+    """Every call (upstream -> downstream) as a table row, filtered, sorted and paged on the server."""
+    _graph_or_503()
+    return _page(state.index().call_rows(), ns, platform, q, sort, desc, offset, limit, problems)
+
+
+@app.get("/api/v1/search")
+def search(q: str):
+    _graph_or_503()
+    return {"hits": state.index().search(q)}
 
 
 @app.get("/api/v1/hotspots")
 def hotspots(ns: str | None = None, platform: bool = False):
-    graph = filter_graph(_graph_or_503(), _ns(ns), platform)
+    graph = _view(ns, platform, level="workloads")[0]
     return {"generatedAt": graph["generatedAt"], "hotspots": graph["hotspots"], "paths": graph["paths"],
             "cascades": graph.get("cascades", [])}
 
 
 @app.get("/api/v1/triage")
 def triage(ns: str | None = None, platform: bool = False,
-           severity: str | None = Query(None, description="critical | warning | info: this level and worse")):
-    """The troubleshooting view as data: root causes first, each with cause, next step and commands."""
+           severity: str | None = Query(None, description="critical | warning | info: this level and worse"),
+           pattern: str | None = Query(None, description="a pattern key: return that pattern's members")):
+    """The troubleshooting view as data: root causes first, each with cause, next step and commands.
+    One problem shared by many workloads comes back once, as a pattern; `pattern=` lists its members."""
     full = _graph_or_503()
-    graph = filter_graph(full, _ns(ns), platform)
+    graph = _view(ns, platform, pattern=pattern)[0]
     rank = {"critical": 0, "warning": 1, "info": 2}
     findings = [f for f in graph["findings"] if rank[f["severity"]] <= rank.get(severity or "info", 2)]
     scope = set(_ns(ns) or [])
     projects = [p for p in full.get("namespaces", [])
                 if (p["name"] in scope if scope else (platform or not p["platform"]))]
-    counts = {k: sum(1 for f in findings if f["severity"] == k) for k in rank}
-    return {"generatedAt": graph["generatedAt"], "cluster": graph.get("cluster"), "counts": counts,
-            "rootCauses": sum(1 for f in findings if f["root"] and not f.get("effectOf") and f["severity"] != "info"),
-            "findings": findings, "projects": projects, "changes": graph.get("changes", []),
+    summary = graph["summary"]
+    return {"generatedAt": graph["generatedAt"], "cluster": graph.get("cluster"),
+            "counts": {k: summary[k] for k in rank}, "rootCauses": summary["problems"], "summary": summary,
+            "patterns": [p for p in graph["patterns"] if rank[p["severity"]] <= rank.get(severity or "info", 2)],
+            "findingsMatching": graph["findingsMatching"], "findings": findings, "projects": projects, "changes": graph.get("changes", []),
             "platform": full.get("platform", {}), "cascades": graph.get("cascades", [])}
 
 

@@ -427,3 +427,37 @@ body.drawer-open .tg-side { position: static; }
 .guide[open] summary .gt::before { content: "▾"; }
 .guide[open] summary { margin-bottom: 5px; }
 #tooltip .t3 { margin-top: 5px; color: var(--text); } #tooltip .t3 b { color: var(--teal); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.1em; margin-right: 5px; }
+
+/* ---------- large estates ---------- */
+#scaleBox { background: linear-gradient(180deg, rgba(79, 209, 255, 0.07), transparent); }
+#scaleBox .sc-txt { color: var(--muted); font-size: 12px; line-height: 1.45; } #scaleBox .sc-txt b { color: var(--text); }
+#scaleBox .sc-txt.warn { color: var(--warn); margin-top: 6px; }
+#scaleBox .sc-open { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; align-items: center; }
+#scaleBox .chip { background: none; cursor: pointer; color: var(--cyan); border-color: rgba(79, 209, 255, 0.4); }
+.d-fold { margin: -4px 0 12px; padding: 7px 10px; border-radius: 8px; border: 1px dashed var(--line-strong); color: var(--muted); font-size: 12px; }
+.d-fold b { color: var(--text); } .d-fold .link { cursor: pointer; color: var(--cyan); margin-left: 6px; white-space: nowrap; }
+.agg-bar { display: flex; height: 7px; border-radius: 4px; overflow: hidden; background: rgba(255, 255, 255, 0.07); gap: 1px; margin-bottom: 6px; }
+.tg-projects.estate { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.tg-projects.estate h2, .tg-h { margin: 0 0 8px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.13em; color: var(--cyan);
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.tg-h { margin: 14px 0 8px; } .tg-h:first-child { margin-top: 2px; }
+.tg-projects.estate h2 .hint, .tg-h .hint { text-transform: none; letter-spacing: 0; font-weight: 450; color: var(--faint); font-size: 11px; }
+.tg-estate .key { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 450; color: var(--faint); font-size: 11px; display: inline-flex; gap: 4px; align-items: center; }
+.tg-estate .key i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; margin-left: 8px; }
+.tg-estate i.ok, .tg-estate .sq button.ok { background: rgba(94, 230, 168, 0.32); }
+.tg-estate i.warning, .tg-estate .sq button.warning { background: var(--warn); }
+.tg-estate i.critical, .tg-estate .sq button.critical { background: var(--crit); box-shadow: 0 0 6px rgba(255, 77, 109, 0.7); }
+.tg-estate .units { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 9px 14px; max-height: 232px; overflow: auto; padding-right: 4px; }
+.tg-estate .un { font-size: 11.5px; font-weight: 600; display: flex; justify-content: space-between; margin-bottom: 3px; }
+.tg-estate .un span { color: var(--crit); font-weight: 500; font-size: 10.5px; }
+.tg-estate .sq { display: flex; flex-wrap: wrap; gap: 2px; }
+.tg-estate .sq button { width: 11px; height: 11px; border-radius: 2px; border: 0; padding: 0; }
+.tg-estate .sq button:hover { outline: 1.5px solid #fff; }
+.tg-worst .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; max-height: 232px; overflow: auto; }
+.tg-pat header .n { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.tg-pat header .nm2 { font-weight: 620; font-size: 13.5px; }
+.tg-pat .title.sub { font-weight: 450; color: var(--muted); font-size: 12px; }
+.tg-f .pods.ex a i { font-style: normal; color: var(--faint); margin-left: 5px; }
+.tg-more { margin: 6px 0 4px; } .tg-note, .tg-count { color: var(--faint); font-size: 11.5px; margin: 6px 0; }
+.tg-back { display: flex; gap: 12px; align-items: baseline; margin-bottom: 10px; } .tg-back .link { cursor: pointer; color: var(--cyan); }
+@media (max-width: 1180px) { .tg-projects.estate { grid-template-columns: 1fr; } }

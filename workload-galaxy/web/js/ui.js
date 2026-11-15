@@ -5,6 +5,12 @@ const $ = (sel) => document.querySelector(sel);
 const KIND_LABEL = { workload: null, entry: null, external: 'External dependency', clients: 'Outside the cluster',
   service: 'Service without pods', host: 'Host' };
 
+// Name of what a folded-away node is drawn as, on the page's own (rolled-up) graph.
+function pageGraphName(ui, id) {
+  const n = ui._pageNodes?.get(id);
+  return n ? n.name : null;
+}
+
 export class UI {
   constructor(ctx) {
     this.ctx = ctx;   // { onNamespaces(list|null, platform), onSelect(sel, focus), onView(v), onOptions(o), onClear() }
@@ -173,6 +179,17 @@ export class UI {
     const q = $('#search').value.trim().toLowerCase();
     const box = $('#searchResults');
     if (!q || !this.graph) { box.hidden = true; return; }
+    if (this.graph.view?.collapsed) {       // the page doesn't hold every workload: ask the server
+      clearTimeout(this._searchT);
+      this._searchT = setTimeout(async () => {
+        let hits = [];
+        try { hits = (await this.ctx.search(q)).hits; } catch { /* keep the box empty */ }
+        if ($('#search').value.trim().toLowerCase() !== q) return;
+        this._showHits(hits.map((h) => ({ name: h.name, ns: h.ns, kind: h.kind,
+          sel: h.pod ? { type: 'pod', key: `${h.id}#${h.pod}`, wid: h.id } : { type: 'node', id: h.id } })));
+      }, 180);
+      return;
+    }
     const hits = [];
     for (const n of this.graph.nodes) {
       if (n.name.toLowerCase().includes(q) || (n.namespace || '').toLowerCase().includes(q)) {
@@ -184,6 +201,11 @@ export class UI {
         }
       }
     }
+    this._showHits(hits);
+  }
+
+  _showHits(hits) {
+    const box = $('#searchResults');
     box.innerHTML = hits.slice(0, 14).map((h, i) => `<li data-i="${i}"><span>${esc(h.name)}</span>
       <span class="ns">${esc(h.ns || '')}</span><span class="kind">${esc(h.kind)}</span></li>`).join('')
       || '<li class="empty">Nothing found</li>';
@@ -192,7 +214,7 @@ export class UI {
       const h = hits[+li.dataset.i];
       box.hidden = true;
       $('#search').value = '';
-      this.ctx.onSelect(h.sel, true);
+      this.ctx.onReveal ? this.ctx.onReveal(h.sel) : this.ctx.onSelect(h.sel, true);
     }));
   }
 
@@ -253,15 +275,29 @@ export class UI {
   // ------------------------------------------------------------------ rail
   renderRail(graph, counts, selection) {
     this.graph = graph;
+    this._pageNodes = new Map(graph.nodes.map((n) => [n.id, n]));
+    const rolled = graph.view?.collapsed;      // at this zoom the planes hold units and their members
     const layers = [
-      ['End users', '#4fd1ff', counts.users], ['Services', '#4f7dff', counts.services],
-      ['Pods & containers', '#8b5cf6', counts.pods], ['Hosts', '#19c9a0', counts.hosts]];
+      ['End users', '#4fd1ff', counts.users], [rolled ? (graph.view.level === 'units' ? 'Business units' : 'Projects') : 'Services', '#4f7dff', counts.services],
+      [rolled ? 'Their members' : 'Pods & containers', '#8b5cf6', counts.pods], ['Hosts', '#19c9a0', counts.hosts]];
     document.querySelector('#layers .layers').innerHTML = layers.map(([name, c, k]) => `<li style="--c:${c}">
       <span class="bar"></span><span class="name">${name}</span>
       <span class="meta">${k.shown} shown${k.critical ? ` · <span class="c">${k.critical} critical</span>` : ''}${k.warning ? ` · <span class="w">${k.warning} warning</span>` : ''}${k.evicted ? ` · <span class="e">${k.evicted} evicted</span>` : ''}${k.unscheduled ? ` · <span class="c">${k.unscheduled} unscheduled</span>` : ''}</span></li>`).join('');
 
+    // On a large estate, say what is being shown and what has been opened.
+    const v = graph.view, scale = $('#scaleBox');
+    scale.hidden = !(v && v.collapsed);
+    if (v && v.collapsed) {
+      const unit = v.level === 'units' ? `${v.units} business units` : `${v.projects} projects`;
+      scale.innerHTML = `<h2>Zoom level</h2>
+        <div class="sc-txt"><b>${fmtNum(v.workloads)}</b> workloads in <b>${v.projects}</b> projects, drawn as <b>${unit}</b>. Double-click one to open it.</div>
+        ${v.expanded.length ? `<div class="sc-open">${v.expanded.map((x) => `<button class="chip" data-close="${esc(x)}" title="Close">${esc(x.replace(/^(grp|ns):/, ''))} ✕</button>`).join('')}
+          <button class="link" data-close="*">Close all</button></div>` : ''}
+        ${v.dropped.length ? `<div class="sc-txt warn">Closed ${v.dropped.map((x) => esc(x.replace(/^(grp|ns):/, ''))).join(', ')} to keep the map readable (${v.budget} things at once).</div>` : ''}`;
+      scale.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => this.ctx.onExpand(b.dataset.close, false)));
+    }
     const cascades = graph.cascades || [];
-    const KIND = { host: 'node', workload: 'workload', call: 'call', service: 'service', entry: 'route' };
+    const KIND = { host: 'node', workload: rolled ? 'unit' : 'workload', call: 'call', service: 'service', entry: 'route' };
     $('#cascades').innerHTML = cascades.length ? cascades.slice(0, 8).map((c, i) => `<li data-i="${i}"
       class="${selection?.type === 'cascade' && selection.root === c.root ? 'sel' : ''}">
       <div class="row1"><span class="lvl" style="background:${LEVEL_COLOR[c.level]}"></span>
@@ -314,7 +350,11 @@ export class UI {
     const tip = $('#tooltip');
     if (!hit || !at || !this.graph) { tip.hidden = true; return; }
     let html = '';
-    if (hit.type === 'pod') {
+    if (hit.type === 'pod' && hit.pod.pseudo) {
+      const p = hit.pod;
+      html = `<div class="t1">${esc(p.name)}</div><div class="t2">${esc(p.summary || '')}${p.expand ? ' · project' : ''}</div>
+        ${p.issues.map((x) => `<div class="t2 issue ${p.level}">${esc(x)}</div>`).join('')}<div class="t2">click for details · double-click to open</div>`;
+    } else if (hit.type === 'pod') {
       const p = hit.pod;
       const lvl = podLevel(p);
       html = `<div class="t1">${esc(p.name)}</div><div class="t2">${esc(p.phase)}${p.reason ? ' · ' + esc(p.reason) : ''}
@@ -326,7 +366,8 @@ export class UI {
       if (!n) { tip.hidden = true; return; }
       const r = n.risk || {};
       html = `<div class="t1">${esc(n.name)}</div><div class="t2">${esc(n.subkind || n.kind)}${n.namespace ? ' · ' + esc(n.namespace) : ''}${n.ghost ? ' · outside filter' : ''}</div>`;
-      if (n.kind === 'workload') html += `<div class="t2">${n.replicas.ready}/${n.replicas.desired} ready · ${n.pods.length} pods</div>`;
+      if (n.aggregate && n.counts) html += `<div class="t2">${fmtNum(n.counts.workloads)} workloads · ${n.counts.failing} failing · double-click to open</div>`;
+      else if (n.kind === 'workload') html += `<div class="t2">${n.replicas.ready}/${n.replicas.desired} ready · ${n.pods.length} pods</div>`;
       const f = (this.graph.findings || []).find((x) => x.subject === n.id && x.severity !== 'info' && !x.effectOf);
       if (f) html += `<div class="t2" style="color:${LEVEL_COLOR[f.severity]}">${esc(f.title)}</div>${f.fix ? `<div class="t3"><b>Next</b>${esc(f.fix)}</div>` : ''}`;
       else if (r.reasons && r.reasons.length) html += `<div class="t2" style="color:${LEVEL_COLOR[r.level]}">${esc(r.reasons[0].text)}</div>`;
@@ -340,9 +381,17 @@ export class UI {
   }
 
   // ------------------------------------------------------------------ drawer
-  renderDrawer(sel, refresh = false) {
+  renderDrawer(sel, refresh = false, detail = null) {
     const d = $('#drawer');
     const scroll = refresh ? d.scrollTop : 0;
+    // On a large estate the page holds a rolled-up picture; the server supplies the real node, its
+    // calls and neighbours. Render from that, then put the page's graph back.
+    const pageGraph = this.graph;
+    if (detail && this.graph) this.graph = { ...this.graph, nodes: detail.nodes, edges: detail.edges, findings: detail.findings, cascades: detail.cascades };
+    try { this._renderDrawer(sel, d, scroll, detail); } finally { this.graph = pageGraph; }
+  }
+
+  _renderDrawer(sel, d, scroll, detail) {
     if (!sel || !this.graph || sel.type === 'path') { d.hidden = true; return; }
     const byId = new Map(this.graph.nodes.map((n) => [n.id, n]));
     let html = '';
@@ -362,7 +411,15 @@ export class UI {
       html = this._nodeHtml(n, byId, sel.type === 'pod' ? sel.key.split('#')[1] : null);
     }
     html += this._blast(sel.type === 'edge' ? sel.id : sel.type === 'node' ? sel.id : null, byId);
+    if (detail) {
+      const on = detail.at && pageGraphName(this, detail.at);
+      html = `<div class="d-fold">${on ? `Shown on the map inside <b>${esc(on)}</b>.` : 'Not on the map at this zoom level.'}
+        <a class="link" data-reveal="1">Open it on the map ▸</a></div>` + html;
+    }
     $('#drawerBody').innerHTML = html;
+    d.querySelectorAll('[data-reveal]').forEach((el) => el.addEventListener('click', () => this.ctx.onReveal(sel)));
+    d.querySelectorAll('[data-expand]').forEach((el) => el.addEventListener('click', () => this.ctx.onExpand(el.dataset.expand, el.dataset.close == null)));
+    d.querySelectorAll('[data-scope]').forEach((el) => el.addEventListener('click', () => this.ctx.onNamespaces([el.dataset.scope], this.platform)));
     d.hidden = false;
     d.scrollTop = scroll;
     d.querySelectorAll('[data-copy]').forEach((el) => el.addEventListener('click', () => {
@@ -393,6 +450,31 @@ export class UI {
     return `<div class="d-sec"><h3>Blast radius · ${c.count} degraded dependent${c.count === 1 ? '' : 's'}${c.userFacing ? ' · reaches users' : ''}</h3>
       <div class="blast">${chips}</div>
       <div style="margin-top:8px"><a class="link" data-cascade="${esc(c.root)}" style="cursor:pointer;color:var(--cyan)">Show this cascade ▸</a></div></div>`;
+  }
+
+  // A rolled-up project or business unit: what it holds, what is wrong inside, and how to open it.
+  _aggregateHtml(n) {
+    const k = n.counts, unit = n.aggregate === 'unit';
+    const fs = (this.graph.findings || []).filter((f) => f.at === n.id && f.severity !== 'info' && f.root && !f.effectOf).slice(0, 6);
+    const bar = (x, c) => (x ? `<i style="flex:${x};background:${c}"></i>` : '');
+    return `<div class="d-kind">${unit ? 'Business unit' : 'Project'}</div><div class="d-title">${esc(n.name)}</div>
+      <div class="d-sub">${unit ? `${k.projects} projects` : esc(n.group)} · ${fmtNum(k.workloads)} workloads · ${fmtNum(k.pods)} pods</div>
+      ${this._risk({ ...n.risk, reasons: [] })}
+      <div class="d-sec"><div class="agg-bar">${bar(k.healthy, 'var(--ok)')}${bar(k.degraded, 'var(--warn)')}${bar(k.down, 'var(--crit)')}</div>
+        <div class="d-sub">${fmtNum(k.healthy)} healthy · <span style="color:var(--warn)">${k.degraded} degraded</span> · <span style="color:var(--crit)">${k.down} down</span></div>
+        <div style="margin-top:9px;display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn small" data-expand="${esc(n.expand)}">Open on the map ▸</button>
+          ${unit ? '' : `<button class="btn small" data-scope="${esc(n.project)}">Show only this project</button>`}</div>
+        <div class="d-sub" style="margin-top:6px">Double-clicking it on the map opens it too.</div></div>
+      ${fs.length ? `<div class="d-sec"><h3>Worst problems inside</h3>${fs.map((f) => `<div class="d-find ${f.severity}" data-node="${esc(f.subject)}" style="cursor:pointer">
+        <div class="cat">${esc(f.category)} · ${esc(f.namespace)}</div><div class="t">${esc(f.subjectName)}: ${esc(f.title)}</div>
+        ${f.fix ? `<p class="fix"><b>Next</b>${esc(f.fix)}</p>` : ''}</div>`).join('')}</div>` : ''}
+      <div class="d-sec"><h3>${unit ? 'Projects' : 'Workloads'} (${n.childrenTotal}) <span style="text-transform:none;letter-spacing:0;font-weight:450;color:var(--faint)">· worst first</span></h3>
+        <ul class="peers">${n.children.map((c) => `<li ${c.expand ? `data-expand="${esc(c.expand)}"` : `data-node="${esc(c.id)}"`}><div class="p1">
+          <span class="st" style="background:${LEVEL_COLOR[c.level]}"></span><span class="nm">${esc(c.name)}</span>
+          <span style="color:var(--faint);font-size:11px;margin-left:auto">${esc(c.ready || '')}</span></div>
+          ${c.issue ? `<div class="p2 issue ${c.level}">${esc(c.issue)}</div>` : ''}</li>`).join('')}</ul>
+        ${n.childrenTotal > n.children.length ? `<div class="d-sub" style="margin-top:6px">+${n.childrenTotal - n.children.length} more: open it, or use the Workloads table in Triage.</div>` : ''}</div>`;
   }
 
   // What diagnose.py found for this node or call: cause, next step, commands.
@@ -513,9 +595,14 @@ export class UI {
     const inbound = this.graph.edges.filter((e) => e.target === n.id);
     const outbound = this.graph.edges.filter((e) => e.source === n.id);
     const kind = KIND_LABEL[n.kind] || n.subkind;
+    if (n.aggregate && n.kind === 'workload') return this._aggregateHtml(n);
     let html = `<div class="d-kind">${esc(kind)}</div><div class="d-title">${esc(n.name)}</div>
       <div class="d-sub">${n.namespace ? esc(n.namespace) : ''}${n.ghost ? ' · outside current filter' : ''}</div>`;
     html += this._risk(n.risk);
+    if (n.aggregate === 'hosts') {
+      html += `<div class="d-sec"><h3>${n.memberCount} nodes grouped</h3><div class="d-sub">Healthy nodes in the same zone are drawn as one. A node with a problem is always shown on its own.</div>
+        <div class="mono" style="margin-top:6px">${n.members.map(esc).join('<br>')}${n.memberCount > n.members.length ? `<br>+${n.memberCount - n.members.length} more` : ''}</div></div>`;
+    }
     if (n.kind === 'workload' && podName) {      // the pod that was clicked comes first
       const pod = n.pods.find((p) => p.name === podName);
       if (pod) html += this._podDetail(n, pod);

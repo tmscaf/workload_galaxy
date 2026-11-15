@@ -4,6 +4,23 @@ The version lives in [`VERSION`](VERSION). Every deploy adds a UTC build stamp
 (`0.3.0-20261111.2318`), shown in the UI's version chip, `/api/v1/version`, the
 image tag and the `app.kubernetes.io/version` label in Rancher.
 
+## 0.9.0
+- **Scales to enterprise estates** (verified on a simulated 606 projects / 11,451 workloads /
+  27,341 pods / 394 nodes) while small clusters look exactly as before.
+  - Topology zooms by meaning: above 150 workloads the unit is the project, above 60 projects
+    the business unit (namespace prefix, or a label). Units are drawn in every view, coloured by
+    how much of them is failing; double-click opens one in place; at most 320 things are drawn.
+  - Calls between units merge into bundles; healthy nodes group by zone.
+  - Triage: the same problem on many workloads is one **shared cause**; projects show as an
+    estate grid by business unit; problems page; Workloads and Calls are server-paged.
+  - Search, the drawer and "Show on map" work against the whole estate through the server.
+  - The page downloads what it draws (60-90 KB) instead of the whole graph (20 MB); responses
+    are gzip-compressed.
+- API: `/api/v1/node`, `/api/v1/workloads`, `/api/v1/calls`, `/api/v1/search`; `topology` gains
+  `expand` and `level`; `triage` gains `summary`, `patterns` and `pattern=`.
+- Demo: `GALAXY_DEMO_SCALE=150x20|enterprise|enterprise-xl` and `scripts/demo-local.sh enterprise`.
+- Camera reframes when a unit is opened or closed, and no longer zooms inside large maps.
+
 ## 0.8.0
 - **Navigation**: Triage and Topology are separate sections in the top bar. Galaxy, Strata, Cascade
   and Gibson are the views of Topology and only show there.
