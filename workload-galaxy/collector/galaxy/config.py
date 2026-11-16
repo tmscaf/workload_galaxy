@@ -53,6 +53,7 @@ class Settings:
     pod_logs: bool = False
     group_by: str = "prefix"
     group_separator: str = "-"
+    sizing_min_history: float = 3600.0   # how long a workload must be watched before "reserves too much" is said
     detail_limit: int = 150
     project_limit: int = 60
     node_budget: int = 320
@@ -92,6 +93,7 @@ def load_settings() -> Settings:
         # namespace name before the separator), "label:<key>" (a namespace label) or "none".
         group_by=os.environ.get("GALAXY_GROUP_BY", "prefix").strip() or "prefix",
         group_separator=os.environ.get("GALAXY_GROUP_SEPARATOR", "-") or "-",
+        sizing_min_history=float(_int("GALAXY_SIZING_MIN_HISTORY_SECONDS", 3600)),
         # Above this many workloads in view the topology shows projects, above project_limit projects
         # it shows business units; node_budget caps what is ever drawn at once.
         detail_limit=max(20, _int("GALAXY_DETAIL_LIMIT", 150)),

@@ -44,6 +44,7 @@ RESOURCES: dict[str, tuple[str, str, bool]] = {
     "events": ("/api/v1", "events", True),
     "persistentvolumeclaims": ("/api/v1", "persistentvolumeclaims", True),
     "resourcequotas": ("/api/v1", "resourcequotas", True),
+    "limitranges": ("/api/v1", "limitranges", True),
     "networkpolicies": ("/apis/networking.k8s.io/v1", "networkpolicies", True),
     "controllerrevisions": ("/apis/apps/v1", "controllerrevisions", True),
     "namespaces": ("/api/v1", "namespaces", False),
@@ -61,7 +62,8 @@ QUERY: dict[str, dict[str, str]] = {"events": {"fieldSelector": "type=Warning"}}
 OPTIONAL = {"routes", "deploymentconfigs", "httproutes", "podmetrics", "replicationcontrollers", "hpas",
             "certificates", "clusteroperators", "clusterversions", "machineconfigpools"}
 # Cluster-scoped extras a namespace-scoped (non-admin) install cannot list: skipped quietly.
-QUIET_403 = {"namespaces", "clusteroperators", "clusterversions", "machineconfigpools"}
+# (limitranges only cross-check sizing advice: an install whose RBAC predates them just skips that check.)
+QUIET_403 = {"namespaces", "clusteroperators", "clusterversions", "machineconfigpools", "limitranges"}
 
 # Fields that are large and never used; dropped to keep snapshots small.
 _DROP_META = ("managedFields",)

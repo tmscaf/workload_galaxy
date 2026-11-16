@@ -190,9 +190,10 @@ export class GalaxyScene {
       const rim = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({
         color, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending }));
       const div = document.createElement('div');
-      div.className = 'lbl layer';
+      div.className = 'lbl layer plane';
       div.style.setProperty('--c', L.color);
       const label = new CSS2DObject(div);
+      label.center.set(1, 0);          // hangs from its anchor, text running away from the plane
       const grp = new THREE.Group();
       grp.add(disc, rim, label);
       this.planes.add(grp);
@@ -1118,6 +1119,21 @@ export class GalaxyScene {
     }
   }
 
+  // A plane's caption stays at the plane's left edge as seen on screen, whatever the camera angle.
+  // Pinned to a fixed point of the rim it would sweep past the node labels as the view drifts,
+  // knocking their metrics out and letting them back in on every pass.
+  _anchorPlaneLabels() {
+    const e = this.camera.matrixWorld.elements;      // column 0 is the camera's right vector
+    let x = -e[0], z = -e[2];
+    const len = Math.hypot(x, z);
+    if (len < 1e-4) return;
+    x /= len; z /= len;
+    for (const L of LAYERS) {
+      const p = this.layout.planes[L.key];
+      this.planeObjs[L.key].label.position.set(x * (p.r + 8), 0, z * (p.r * 0.92 + 8));
+    }
+  }
+
   _layoutPlanes() {
     const P = this.layout.planes;
     const counts = this.layerCounts();
@@ -1547,6 +1563,7 @@ export class GalaxyScene {
       o.label.element.style.opacity = W.s > 0.6 ? (W.s - 0.6) / 0.4 : 0;
       o.grp.visible = W.s > 0.01;
     }
+    if (W.s > 0.01) this._anchorPlaneLabels();
     this.columnsGroup.visible = W.c > 0.01;
     for (const o of this.columnObjs || []) {
       o.pane.material.opacity = 0.05 * W.c;
@@ -1851,13 +1868,21 @@ export class GalaxyScene {
       el.style.marginTop = box && box === below ? `${Math.round(drop)}px` : '';
       if (!box) continue;
       placed.push(box);
-      if (meta && !it.compact && box === above) shown.push({ el, box, x, y, nw, mw: Math.max(nw, meta.textContent.trim().length * 5.6) });
+      if (meta && !it.compact && box === above) {
+        shown.push({ el, box, x, y, nw, had: !!el._meta, mw: Math.max(nw, meta.textContent.trim().length * 5.6) });
+      }
+      el._meta = false;
     }
     for (const s of shown) {      // second pass: the metrics line, where nothing else needs the room
       // With its metrics the label grows to two lines around the same centre: name up, metrics under it.
       const name = { x0: s.x - s.nw / 2 - 2, x1: s.x + s.nw / 2 + 2, y0: s.y - 17, y1: s.y + 1 };
       const line = { x0: s.x - s.mw / 2, x1: s.x + s.mw / 2, y0: s.y + 1, y1: s.y + 15 };
-      if (hit(name, placed, s.box) || hit(line, placed, s.box)) continue;
+      // Sticky: a line that is showing survives a near miss, one that is not needs clear room to
+      // come back. Without it a label on the boundary blinks as the view drifts.
+      const g = s.had ? -4 : 6;
+      const grow = (b) => ({ x0: b.x0 - g, x1: b.x1 + g, y0: b.y0 - g, y1: b.y1 + g });
+      if (hit(grow(name), placed, s.box) || hit(grow(line), placed, s.box)) continue;
+      s.el._meta = true;
       s.el.classList.remove('compact');
       Object.assign(s.box, name);
       placed.push(line);

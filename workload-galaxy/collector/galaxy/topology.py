@@ -126,8 +126,10 @@ class Builder:
                  probes: tuple[dict, dict] | None = None, ext_dns: dict[str, str] | None = None,
                  hidden_namespaces: set[str] | None = None, sources: dict | None = None,
                  flow_idle_seconds: float = 60, internal_cidrs: list[str] | None = None,
-                 event_window_seconds: float = 3600, group_by: str = "prefix", group_separator: str = "-"):
+                 event_window_seconds: float = 3600, group_by: str = "prefix", group_separator: str = "-",
+                 usage_history=None, sizing_min_history: float = 3600.0):
         self.snap = snap
+        self.usage_history, self.sizing_min_history = usage_history, sizing_min_history
         self.reports = reports or []
         self.mesh = mesh or {}
         self.vip_probes, self.ep_probes = probes or ({}, {})
@@ -198,10 +200,12 @@ class Builder:
             for o in s.get(key, []):
                 self.controllers[(ns_of(o), kind, name_of(o))] = o
         self.metrics = {}
+        self.metrics_c: dict[tuple[str, str], list[tuple[str, float, float]]] = {}   # per container, for sizing advice
         for m in s.get("podmetrics", []):
-            cpu = sum(parse_cpu((c.get("usage") or {}).get("cpu")) or 0 for c in m.get("containers") or [])
-            mem = sum(parse_mem((c.get("usage") or {}).get("memory")) or 0 for c in m.get("containers") or [])
-            self.metrics[(ns_of(m), name_of(m))] = (cpu, mem)
+            rows = [(c.get("name", ""), parse_cpu((c.get("usage") or {}).get("cpu")) or 0,
+                     parse_mem((c.get("usage") or {}).get("memory")) or 0) for c in m.get("containers") or []]
+            self.metrics[(ns_of(m), name_of(m))] = (sum(r[1] for r in rows), sum(r[2] for r in rows))
+            self.metrics_c[(ns_of(m), name_of(m))] = rows
         self.pods_by_key: dict[str, dict] = {}
         self.pod_wl: dict[str, str] = {}
         self.pod_uid: dict[str, str] = {}
@@ -554,7 +558,7 @@ class Builder:
             wid = f"wl:{ns_of(hpa)}/{target.get('kind')}/{target.get('name')}"
             if wid in self.nodes:
                 st, sp = hpa.get("status") or {}, hpa.get("spec") or {}
-                self.nodes[wid]["hpa"] = {"min": sp.get("minReplicas", 1), "max": sp.get("maxReplicas"),
+                self.nodes[wid]["hpa"] = {"name": name_of(hpa), "min": sp.get("minReplicas", 1), "max": sp.get("maxReplicas"),
                                           "current": st.get("currentReplicas"), "desired": st.get("desiredReplicas")}
 
     @staticmethod

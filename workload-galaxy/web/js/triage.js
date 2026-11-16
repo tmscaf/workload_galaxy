@@ -7,7 +7,7 @@
 //   What changed               rollouts, restarts, events, node transitions - newest first
 //
 // It renders the same graph the 3D views use (graph.findings / changes / platform / namespaces).
-import { esc, fmtAge, fmtMs, fmtNum, fmtPct, LEVEL_COLOR, nsColor } from './format.js';
+import { esc, fmtAge, fmtMs, fmtNum, fmtPct, LEVEL_COLOR, nsColor, optionsHtml } from './format.js';
 
 const SEV = { critical: 0, warning: 1, info: 2 };
 const SEV_COLOR = { critical: 'var(--crit)', warning: 'var(--warn)', info: 'var(--muted)', ok: 'var(--ok)' };
@@ -15,7 +15,7 @@ const CATEGORY = {
   rollout: 'Rollout', crash: 'Crashing', image: 'Image', config: 'Config', admission: 'Admission', quota: 'Quota',
   scheduling: 'Scheduling', storage: 'Storage', probes: 'Probes', availability: 'Availability', network: 'Network',
   latency: 'Latency & errors', saturation: 'Saturation', node: 'Nodes', platform: 'Platform', batch: 'Jobs',
-  hygiene: 'Hygiene',
+  sizing: 'Right-sizing', hygiene: 'Hygiene',
 };
 const ago = (s) => (s == null ? '' : s < 5 ? 'now' : `${fmtAge(Math.round(s))} ago`);
 
@@ -102,6 +102,7 @@ export class Triage {
       g.userFacing = g.findings.some((f) => f.userFacing);
       g.head = g.findings[0];
       g.categories = new Set(real.length ? real.map((f) => f.category) : g.findings.map((f) => f.category));
+      g.sizing = g.findings.some((f) => f.options?.length);       // the sizing advisor has concrete fixes for it
       return g;
     }).sort((a, b) => SEV[a.severity] - SEV[b.severity] || (a.orphan ? 1 : 0) - (b.orphan ? 1 : 0)
       || (b.userFacing ? 1 : 0) - (a.userFacing ? 1 : 0) || b.blast - a.blast || b.head.weight - a.head.weight);
@@ -208,11 +209,13 @@ export class Triage {
     const cats = new Map();
     for (const g of (this.showInfo ? this.groups : real)) for (const c of g.categories) cats.set(c, (cats.get(c) || 0) + 1);
     const order = Object.keys(CATEGORY).filter((c) => cats.has(c));
+    const sized = this.groups.filter((g) => g.sizing).length + (this.graph.patterns || []).filter((p) => p.sizing).length;
     const tab = (id, label, n) => `<button class="${this.tab === id ? 'on' : ''}" data-tab="${id}">${label} <span>${n}</span></button>`;
     this.el.querySelector('.tg-tabs').innerHTML = `
       <div class="seg">${tab('problems', 'Problems', S ? fmtNum(S.problems) : real.length)}${tab('workloads', 'Workloads', fmtNum(wl))}${tab('calls', 'Calls', calls === '' ? '' : fmtNum(calls))}</div>
       ${this.tab !== 'problems' ? `<label class="tg-info" title="Hide rows that are healthy"><input type="checkbox" id="tgOnly" ${only ? 'checked' : ''}> Only problems</label>` : ''}
       ${this.tab === 'problems' ? `<div class="cats"><button class="${!this.category ? 'on' : ''}" data-cat="">All</button>
+        ${sized ? `<button class="sz ${this.category === '_sizing' ? 'on' : ''}" data-cat="_sizing" title="Too little or too much CPU, memory, quota or replicas: each with ways to fix it">Wrong-sized <span>${sized}</span></button>` : ''}
         ${order.map((c) => `<button class="${this.category === c ? 'on' : ''}" data-cat="${c}">${CATEGORY[c]} <span>${cats.get(c)}</span></button>`).join('')}</div>
         <label class="tg-info" title="Hardening gaps and other things that are not failures"><input type="checkbox" id="tgInfo" ${this.showInfo ? 'checked' : ''}> Show informational</label>` : ''}
       <input id="tgSearch" type="search" placeholder="Filter…" value="${esc(this.query)}" autocomplete="off">`;
@@ -228,10 +231,11 @@ export class Triage {
     const q = this.query;
     if (this.pattern) return this._patternMembers();
     const match = (text) => !q || text.toLowerCase().includes(q);
-    const patterns = (this.graph.patterns || []).filter((p) => (this.showInfo || p.severity !== 'info')
-      && (!this.category || p.category === this.category) && match(`${p.label} ${p.cause}`));
-    const list = this.groups.filter((g) => (this.showInfo || g.severity !== 'info')
-      && (!this.category || g.categories.has(this.category))
+    const sizing = this.category === '_sizing';        // not a category: everything the sizing advisor has fixes for
+    const patterns = (this.graph.patterns || []).filter((p) => (sizing ? p.sizing : (this.showInfo || p.severity !== 'info')
+      && (!this.category || p.category === this.category)) && match(`${p.label} ${p.cause}`));
+    const list = this.groups.filter((g) => (sizing ? g.sizing : (this.showInfo || g.severity !== 'info')
+      && (!this.category || g.categories.has(this.category)))
       && match([g.head.subjectName, g.head.namespace, ...g.findings.map((f) => f.title + ' ' + f.cause)].join(' ')));
     if (!list.length && !patterns.length) {
       return `<div class="tg-clear">${(this.graph.summary?.problems || this.groups.some((g) => g.severity !== 'info')) ? 'Nothing matches this filter.'
@@ -309,7 +313,7 @@ export class Triage {
         ${h.namespace ? `<span class="ns" style="--c:${nsColor(h.namespace, h.platform)}">${esc(h.namespace)}</span>` : ''}
         ${chips.join('')}
         ${sel ? `<button class="link map" ${sel} data-map="1" title="Show it in the topology">Show on map ▸</button>` : ''}</header>
-      ${g.findings.filter((f) => this.showInfo || f.severity !== 'info' || g.severity === 'info').map((f) => this._finding(f)).join('')}
+      ${g.findings.filter((f) => this.showInfo || f.severity !== 'info' || g.severity === 'info' || (this.category === '_sizing' && f.options?.length)).map((f) => this._finding(f)).join('')}
       ${g.symptoms.length ? this._symptoms(g) : ''}</article>`;
   }
 
@@ -321,7 +325,7 @@ export class Triage {
         <span class="title">${f.effectOf ? '<span class="eff">↳ so:</span> ' : ''}${esc(f.title)}</span>
         ${f.sinceS != null ? `<span class="since">${ago(f.sinceS)}</span>` : ''}</div>
       ${f.cause ? `<p class="why"><b>Why</b>${esc(f.cause)}</p>` : ''}
-      ${f.fix ? `<p class="fix"><b>Next</b>${esc(f.fix)}</p>` : ''}
+      ${f.options?.length ? optionsHtml(f) : f.fix ? `<p class="fix"><b>Next</b>${esc(f.fix)}</p>` : ''}
       ${more ? `<details data-key="${esc(key)}" ${this.open.has(key) ? 'open' : ''}><summary>Evidence & commands</summary>
         ${f.detail ? `<div class="det">${esc(f.detail)}</div>` : ''}
         ${f.evidence.map((e) => `<pre class="ev-msg">${esc(e)}</pre>`).join('')}

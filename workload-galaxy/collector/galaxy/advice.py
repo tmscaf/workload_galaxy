@@ -14,7 +14,7 @@ CATEGORIES = [
     ("admission", "Admission"), ("quota", "Quota"), ("scheduling", "Scheduling"), ("storage", "Storage"),
     ("probes", "Probes"), ("availability", "Availability"), ("network", "Network"), ("latency", "Latency & errors"),
     ("saturation", "Saturation"), ("node", "Nodes"), ("platform", "Platform"), ("batch", "Jobs"),
-    ("hygiene", "Hygiene"),
+    ("sizing", "Right-sizing"), ("hygiene", "Hygiene"),
 ]
 
 REF = {"Deployment": "deploy", "StatefulSet": "statefulset", "DaemonSet": "daemonset", "DeploymentConfig": "dc",
@@ -147,6 +147,11 @@ def sched_advice(message: str) -> tuple[str, str, str]:
 def admission_advice(message: str, openshift: bool) -> tuple[str, str, str, str]:
     """-> (category, what, cause, fix) for a controller that can't create its pods."""
     m = message or ""
+    if re.search(r"failed quota|must specify", m, re.I):
+        return ("quota", "the project quota requires requests and limits the pod doesn't set",
+                "The project's ResourceQuota counts CPU or memory, so every container must declare how much it asks for. "
+                "This pod leaves some of them out, so it can't be counted and is refused.",
+                "Set the missing requests / limits on the containers, or give the project a LimitRange with defaults.")
     if re.search(r"exceeded quota", m, re.I):
         return ("quota", "the project quota is exhausted",
                 "Creating the pod would exceed the project's ResourceQuota (the message lists requested / used / limit).",
@@ -374,6 +379,7 @@ PATTERN_LABELS = {
     "wl:accept-queue": "connections queueing faster than the app accepts them", "wl:recvq": "app not reading its sockets fast enough",
     "wl:probe-fail": "connections to the pods failing", "wl:probe-slow": "slow to accept connections",
     "wl:single-replica": "single replica serving several callers",
+    "sizing:over": "reserving far more than they use",
     "call:p95": "slow calls", "call:errors": "calls returning server errors", "call:rtt": "slow network path",
     "call:retrans": "packet loss on calls", "call:sendq": "callee not reading what callers send",
     "call:pending": "connection attempts going unanswered", "call:probe-fail": "test connections failing",

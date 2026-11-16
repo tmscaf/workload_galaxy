@@ -25,6 +25,7 @@ from collections import Counter, defaultdict
 
 from . import advice as A
 from .risk import bad_reason
+from .sizing import Sizer
 from .util import controller_ref, labels_of, meta, name_of, ns_of, parse_cpu, parse_mem, parse_ts, now_utc
 
 IMAGE_REASONS = {"ImagePullBackOff", "ErrImagePull", "InvalidImageName", "ErrImageNeverPull", "ImageInspectError"}
@@ -97,6 +98,10 @@ class Diagnoser:
         self.changes: list[dict] = []
         self.platform: dict = {}
         self.quota_ratio: dict[str, float] = {}
+        # (finding id, kind, facts): resource-constraint findings the sizing advisor adds options to.
+        self.sizing_hints: list[tuple[str, str, dict]] = []
+        self.sizer = Sizer(self, getattr(builder, "usage_history", None),
+                           min_history=getattr(builder, "sizing_min_history", 3600.0))
 
     # ------------------------------------------------------------------ helpers
     def _age(self, ts: str | None) -> int | None:
@@ -167,6 +172,7 @@ class Diagnoser:
         self._certificates()
         self._openshift_platform()
         self._hygiene()
+        self.sizer._guard(self.sizer.run)
 
     # ---- events
     def _index_events(self) -> None:
@@ -446,10 +452,13 @@ class Diagnoser:
                 commands.insert(0, self.cmd("{cli} -n {ns} describe quota", ns=ns))
             elif "security" in what and self.openshift:
                 commands.insert(0, f"oc -n {ns} get {self.ref(n)} -o yaml | oc adm policy scc-subject-review -f -")
-            self.add(category, f"create:{wid}", f"Can't create pods: {what}", subject=wid,
-                     pattern=f"create:{what}", label=f"can't create pods: {what}",
-                     weight=0.6 if ready else 0.85, cause=cause, fix=fix, commands=commands, evidence=[msg],
-                     since_s=(ev or {}).get("ageS"), covers=("replicas",), risk_category="availability")
+            f = self.add(category, f"create:{wid}", f"Can't create pods: {what}", subject=wid,
+                         pattern=f"create:{what}", label=f"can't create pods: {what}",
+                         weight=0.6 if ready else 0.85, cause=cause, fix=fix, commands=commands, evidence=[msg],
+                         since_s=(ev or {}).get("ageS"), covers=("replicas",), risk_category="availability")
+            if f and (category == "quota" or "LimitRange" in what):
+                self.sizing_hints.append((f["id"], "quota_create" if category == "quota" else "limitrange",
+                                          {"wid": wid, "message": msg}))
 
     # ---- pods
     def _pods(self) -> None:
@@ -469,12 +478,14 @@ class Diagnoser:
                 count = len(pods)
                 noun = f"{count} pod{'s' if count > 1 else ''}"
                 klass = d.get("klass") or _generic(d["what"])
-                self.add(d["category"], f"{kind}:{wid}:{sig}"[:200], f"{noun} {d['what']}", subject=wid, pods=pods,
-                         pattern=f"{kind}:{klass}", label=klass,
-                         severity=d.get("severity", "critical"), cause=d["cause"], fix=d["fix"],
-                         commands=[c.replace("{pod}", pods[0]) for c in d.get("commands", [])],
-                         evidence=d.get("evidence", []), since_s=d.get("since"), detail=d.get("detail", ""),
-                         covers=d.get("covers", ()))
+                f = self.add(d["category"], f"{kind}:{wid}:{sig}"[:200], f"{noun} {d['what']}", subject=wid, pods=pods,
+                             pattern=f"{kind}:{klass}", label=klass,
+                             severity=d.get("severity", "critical"), cause=d["cause"], fix=d["fix"],
+                             commands=[c.replace("{pod}", pods[0]) for c in d.get("commands", [])],
+                             evidence=d.get("evidence", []), since_s=d.get("since"), detail=d.get("detail", ""),
+                             covers=d.get("covers", ()))
+                if f and d.get("sizing"):
+                    self.sizing_hints.append((f["id"], d["sizing"][0], {**d["sizing"][1], "wid": wid, "count": count}))
 
     def _pod_problems(self, n: dict, p: dict) -> list[tuple[str, str, dict]]:
         ns, pod = n["namespace"], p["name"]
@@ -498,6 +509,7 @@ class Diagnoser:
                 "klass": f"can't be scheduled: {what}",
                 "detail": f"Each pod requests {', '.join(req)}." if req else "", "evidence": [p["message"]],
                 "since": p.get("ageSeconds"), "covers": ("unschedulable", "pod:Unschedulable", "replicas"),
+                "sizing": ("sched", {"pod": p, "message": p["message"]}),
                 "commands": [describe, self.cmd("{cli} describe nodes | grep -A6 'Allocated resources'")]})]
 
         # Image can't be pulled.
@@ -558,6 +570,7 @@ class Diagnoser:
                     "fix": fix, "evidence": [last.get("message") or crash["message"]], "since": last.get("ageS"),
                     "detail": f"{crash['restarts']} restarts" + (f", last {dur(last.get('ageS'))} ago" if last.get("ageS") is not None else "") + ".",
                     "covers": ("pod:CrashLoopBackOff", "pod:OOMKilled", "pod:RunContainerError", "restarts", "replicas"),
+                    "sizing": ("oom", {"container": crash["name"]}) if last.get("reason") == "OOMKilled" and not crash["init"] else None,
                     "commands": [logs(crash["name"], True), describe]}))
             return out
 
@@ -721,7 +734,7 @@ class Diagnoser:
             if ratio < 0.9:
                 continue
             tight = [f"{res} {u} of {h} ({round(r * 100)}%)" for r, res, u, h in rows if r >= 0.9][:4]
-            self.add("quota", f"quota:{ns}/{name}", f"Project quota {round(ratio * 100)}% used: {rows[0][1]}",
+            f = self.add("quota", f"quota:{ns}/{name}", f"Project quota {round(ratio * 100)}% used: {rows[0][1]}",
                      namespace=ns, severity="critical" if ratio >= 1 else "warning",
                      detail="; ".join(tight),
                      cause="The project's ResourceQuota is " + ("exhausted: new pods (including rollouts and scale-ups) are "
@@ -730,6 +743,8 @@ class Diagnoser:
                      fix="Raise the quota, or lower requests/limits or replica counts in this project. Rolling updates "
                          "need headroom for the surge pod.",
                      commands=[self.cmd("{cli} -n {ns} describe quota {name}", ns=ns, name=name)])
+            if f:
+                self.sizing_hints.append((f["id"], "quota", {"ns": ns, "name": name}))
 
     # ---- services and their wiring
     def _services(self) -> None:
@@ -1013,7 +1028,7 @@ class Diagnoser:
             for c in st.get("conditions") or []:
                 if c.get("type") in ("ScalingActive", "AbleToScale") and c.get("status") == "False" \
                         and c.get("reason") != "ScalingDisabled":
-                    self.add("saturation", f"hpa:{ns}/{name}", f"Autoscaler {name} can't scale: {c.get('reason', '')}",
+                    f = self.add("saturation", f"hpa:{ns}/{name}", f"Autoscaler {name} can't scale: {c.get('reason', '')}",
                              subject=wid if wid in self.b.nodes else "", namespace=ns, weight=0.3,
                              cause="The HorizontalPodAutoscaler can't compute a replica count, so the workload stays at "
                                    "its current size whatever the load. Usually metrics are missing (no metrics-server / "
@@ -1021,6 +1036,8 @@ class Diagnoser:
                              fix="Check that `top pods` works and that every container sets a request for the metric.",
                              evidence=[c.get("message", "")],
                              commands=[self.cmd("{cli} -n {ns} describe hpa {name}", ns=ns, name=name)])
+                    if f and wid in self.b.nodes:
+                        self.sizing_hints.append((f["id"], "hpa_stuck", {"wid": wid}))
             age = self._age(st.get("lastScaleTime"))
             if age is not None and age < 7200 and wid in self.b.nodes:
                 self.changes.append({"ageS": age, "kind": "scale", "subject": wid, "namespace": ns, "level": "ok",
@@ -1139,7 +1156,8 @@ class Diagnoser:
     # ------------------------------------------------------------------ pass 2 (after scoring)
     def finish(self, graph: dict) -> None:
         nodes = {n["id"]: n for n in graph["nodes"]}
-        explained_subjects = {f["subject"] for f in self.findings.values() if f["severity"] != "info"}
+        explained_subjects = {f["subject"] for f in self.findings.values()
+                              if f["severity"] != "info" and f["category"] != "saturation"}
         for n in graph["nodes"]:
             risk = n.get("risk") or {}
             if n["kind"] == "host":
@@ -1244,6 +1262,7 @@ class Diagnoser:
                 if f["root"] and f["severity"] != "info":
                     f["blast"], f["userFacing"] = c["count"], c["userFacing"]
 
+        self.sizer._guard(self.sizer.after)
         # The whole list stays server-side; each response carries the part its scope needs (see summarize()).
         graph["findings"] = sorted(self.findings.values(), key=lambda f: (
             SEV_RANK[f["severity"]], not f["root"], -int(f["userFacing"]), -f["blast"], -f["weight"], f["title"]))
@@ -1340,7 +1359,7 @@ def summarize(findings: list[dict], *, pattern: str | None = None, limit: int = 
             "count": len(subjects), "projects": len({f["namespace"] for f in fs if f["namespace"]}),
             "units": [{"name": g, "count": c} for g, c in groups.most_common(4)],
             "userFacing": sum(1 for f in fs if f["userFacing"]), "cause": worst["cause"], "fix": worst["fix"],
-            "kind": worst["subjectKind"] or "project",
+            "kind": worst["subjectKind"] or "project", "sizing": any(f.get("options") for f in fs),
             "examples": [{"id": f["id"], "subject": f["subject"], "subjectName": f["subjectName"],
                           "namespace": f["namespace"], "title": f["title"]} for f in fs[:5]]})
         for f in fs:

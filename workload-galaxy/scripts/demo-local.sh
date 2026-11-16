@@ -3,7 +3,7 @@
 # can see everything the board does without a cluster. Needs Docker; touches nothing else.
 #
 #   scripts/demo-local.sh                  # "A bad release day" (six deployments failing six ways)
-#   scripts/demo-local.sh network          # or: infrastructure | cascade | baseline
+#   scripts/demo-local.sh network          # or: infrastructure | cascade | sizing | baseline
 #   scripts/demo-local.sh enterprise       # 600 projects, ~11,500 workloads, 390 nodes: how it scales
 #   scripts/demo-local.sh stop             # remove it
 #   PORT=9000 scripts/demo-local.sh        # another port (default 8099)

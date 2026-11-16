@@ -236,6 +236,7 @@ body.view-cascade .legend-cascade { display: inline-flex; }
 .lbl.ns .n { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.18em; font-weight: 700; color: var(--c); opacity: 0.9; }
 .lbl.ns .m { font-size: 10.5px; }
 .lbl.layer { text-align: left; transform: none; }
+.lbl.layer.plane { text-align: right; }
 .lbl.layer .n { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.14em; font-weight: 700; color: var(--c); }
 .lbl.compact .m { display: none; }
 .lbl.compact .n { font-size: 11px; }
@@ -348,6 +349,20 @@ body.drawer-open #triage { right: 408px; }
   border: 1px solid var(--line); }
 .cmd code { font: 11.5px var(--mono); color: #b9f3de; flex: 1; word-break: break-all; }
 .cmd button { font-size: 11px; flex: none; }
+.cats button.sz { border-color: rgba(94, 230, 168, 0.35); color: #a8f5d2; }
+/* "Ways to fix it": numbered options under a finding (Triage card and drawer). */
+.ways { margin: 8px 0 0 82px; max-width: 96ch; padding: 8px 11px 9px; border-radius: 9px; border: 1px solid rgba(94, 230, 168, 0.22);
+  background: rgba(94, 230, 168, 0.045); }
+.d-find .ways { margin-left: 0; }
+.ways-h { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; color: var(--teal); }
+.ways ol { margin: 5px 0 0; padding-left: 20px; display: grid; gap: 8px; }
+.ways li { font-size: 12.5px; color: var(--muted); line-height: 1.45; } .ways li::marker { color: var(--teal); font-weight: 700; }
+.ways .w-t { color: var(--text); font-weight: 600; }
+.ways .w-adm { margin-left: 8px; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+  padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--muted); white-space: nowrap; }
+.ways li p, .tg-f .ways li p, .d-find .ways li p { margin: 2px 0 0; max-width: none; font-size: 12px; color: var(--muted); }
+.ways li p.w-note { color: #ffc978; } .ways li p.w-note::before { content: "Check first: "; font-weight: 700; }
+.ways .w-foot, .tg-f .ways .w-foot { margin: 8px 0 0; font-size: 11.5px; color: var(--faint); max-width: none; }
 .tg-sym { margin-left: 0; margin-top: 9px; padding-top: 8px; border-top: 1px dashed rgba(130, 165, 255, 0.14); }
 .tg-sym ul { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 3px; }
 .tg-sym li { display: flex; gap: 10px; color: var(--muted); font-size: 12px; }

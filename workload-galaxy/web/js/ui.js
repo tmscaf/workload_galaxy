@@ -1,5 +1,5 @@
 // DOM panels around the 3D view.
-import { esc, fmtAge, fmtBytes, fmtCpu, fmtMs, fmtNum, fmtPct, edgeMetric, LEVEL_COLOR, nsColor, podLevel, visiblePods } from './format.js';
+import { esc, fmtAge, fmtBytes, fmtCpu, fmtMs, fmtNum, fmtPct, edgeMetric, LEVEL_COLOR, nsColor, optionsHtml, podLevel, visiblePods } from './format.js';
 
 const $ = (sel) => document.querySelector(sel);
 const KIND_LABEL = { workload: null, entry: null, external: 'External dependency', clients: 'Outside the cluster',
@@ -489,7 +489,7 @@ export class UI {
     const card = (f) => `<div class="d-find ${f.severity}"><div class="cat">${esc(f.category)}${f.root ? '' : ` · symptom of ${esc(f.causedByName || '')}`}</div>
       <div class="t">${esc(f.title)}</div>
       ${f.cause ? `<p><b>Why</b>${esc(f.cause)}</p>` : ''}${f.detail ? `<p>${esc(f.detail)}</p>` : ''}
-      ${f.fix ? `<p class="fix"><b>Next</b>${esc(f.fix)}</p>` : ''}
+      ${f.options?.length ? optionsHtml(f) : f.fix ? `<p class="fix"><b>Next</b>${esc(f.fix)}</p>` : ''}
       ${f.evidence.map((e) => `<pre class="ev-msg">${esc(e)}</pre>`).join('')}
       ${f.commands.map((c) => `<div class="cmd"><code>${esc(c)}</code><button class="link" data-copy="${esc(c)}">copy</button></div>`).join('')}</div>`;
     return (real.length ? `<div class="d-sec"><h3>Diagnosis</h3>${real.map(card).join('')}</div>` : '')

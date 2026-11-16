@@ -4,6 +4,30 @@ The version lives in [`VERSION`](VERSION). Every deploy adds a UTC build stamp
 (`0.3.0-20261111.2318`), shown in the UI's version chip, `/api/v1/version`, the
 image tag and the `app.kubernetes.io/version` label in Rancher.
 
+## 0.11.0
+- **Ways to fix it.** A workload that is the wrong size now comes with numbered options: what
+  to change, to what value, why, and the command to copy. Covers OOM kills, memory near its
+  limit, CPU throttling, pods no node can hold, exhausted quotas, LimitRange refusals,
+  autoscalers at their ceiling or unable to scale, nodes out of memory or CPU, evictions, and
+  workloads reserving far more than they use.
+- Each option is checked against the project quota, the LimitRange and what the nodes have
+  unreserved, and says when one of them would stop it ("Check first"). Options that need a
+  cluster admin are tagged; Helm and Argo CD workloads are flagged.
+- Sized from live usage and the peak seen since the collector started (in memory, up to a
+  day). The dashboard never applies anything.
+- Triage: a **Wrong-sized** filter lists everything with sizing options; new category
+  *Right-sizing* (information only).
+- Showcase: preset "Wrong-sized workloads" (`scripts/demo-local.sh sizing`), scenarios
+  *Autoscaler at its ceiling* and *Reserves far more than it uses*.
+- Reads LimitRanges (added to the ClusterRole; an older role just skips that check).
+
+## 0.10.1
+- Strata: a plane's caption ("HOSTS · 1 shown") stays at the plane's left edge on screen. It was
+  pinned to one point of the rim, so the drifting view swept it past the node labels and each
+  pass knocked a label's metrics line out and let it back in.
+- A metrics line that is showing survives a near miss and one that is hidden needs clear room
+  to return, so a label on the boundary no longer blinks.
+
 ## 0.10.0
 - **Problems only** (Topology, bottom bar): draws what is failing, worst first, each with what
   calls it and what it depends on; everything healthy is rolled up into its project or unit.

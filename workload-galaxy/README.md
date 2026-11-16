@@ -211,11 +211,44 @@ Only *where* a config reference was found is reported (`env DATABASE_URL`,
 | Nodes | NotReady, memory/disk/PID pressure, reservations exhausted, packet loss on one node, cordoned | Nodes + agent |
 | Platform | OpenShift cluster operators degraded or unavailable, cluster upgrade, MachineConfigPool updating or degraded | config.openshift.io |
 | Jobs | failed Jobs and CronJob runs (finished pods aren't on the maps) | Job conditions |
+| Right-sizing | workloads reserving far more CPU or memory than they use (information only, and only after watching for an hour) | requests vs. peak usage |
 | Hygiene | no readiness probe, no memory limit, no requests, `:latest` tags, single replica (information only, hidden by default) | pod templates |
 
 It does not read Secrets, and it only reports what the API states: a finding's
 *Why* is the most likely cause for that signal, and the evidence quoted under it
 is the cluster's own message, so you can check it.
+
+### Ways to fix it: sizing advice
+
+When a workload is the wrong size, the finding carries a numbered list of **ways to fix
+it**: what to change, to what value, why that value, and the command to copy. The
+**Wrong-sized** filter in Triage lists every finding that has one.
+
+| Problem | Options it offers |
+|---|---|
+| OOMKilled, or memory close to its limit | the limit (and request) to set; a runtime hint when the image is a JVM, Node.js, Go or a datastore; how to tell a leak from a limit that is too small |
+| CPU throttled | a higher limit; the replica count that brings each pod back to ~70%; an autoscaler |
+| Pod can't be scheduled (insufficient CPU / memory) | what each pod asks for against the most any node has free and the largest node; a smaller request sized from what its running pods use; which other workloads hold reservations they don't use; adding a node |
+| Project quota exhausted | the quota value that fits what is running plus what is missing; what the project's own workloads could give back; rolling out without a surge pod |
+| Quota requires requests / limits the pod doesn't set, or a LimitRange refuses it | the values to set |
+| Autoscaler pinned at its maximum | the `maxReplicas` the load calls for (from current vs. target utilisation) and how many more pods the nodes can take; bigger pods instead |
+| Autoscaler can't compute a replica count | the missing CPU request |
+| Node out of memory or CPU, or its reservations exhausted | the pods using far more than they requested, and what to request instead |
+| Pods evicted | an honest memory request; a second replica |
+| Reserving far more than it uses | the requests to lower to |
+
+Every suggestion is checked against what would stop it working, and says so under
+**Check first**: the project quota doesn't have that much left, a LimitRange caps the
+container below the new value, or no node has that much unreserved. Options that need
+rights a project owner usually doesn't have are tagged **cluster admin**, and a workload
+deployed by Helm or Argo CD is flagged, because a manual edit there is reverted.
+
+The numbers come from live usage and the highest usage the collector has seen since it
+started (kept in memory, up to a day). Until it has watched a workload for ten minutes
+the advice says it is working from a single reading. It is a starting point for a
+conversation with the workload's owner, not a capacity plan: check a busy period before
+lowering anything. **The dashboard never applies a change.** RBAC stays read-only; the
+commands are for a person to review and run.
 
 ### Latency / risk signals
 
@@ -258,6 +291,7 @@ scripts/demo-local.sh              # "A bad release day": six deployments failin
 scripts/demo-local.sh network      # wiring and network faults
 scripts/demo-local.sh infrastructure
 scripts/demo-local.sh cascade      # one root cause, many victims
+scripts/demo-local.sh sizing       # wrong-sized workloads, each with ways to fix it
 scripts/demo-local.sh enterprise   # 600 projects, ~11,500 workloads, 390 nodes: how it scales
 scripts/demo-local.sh stop
 ```
@@ -265,7 +299,7 @@ scripts/demo-local.sh stop
 It builds the image, runs it in demo mode on http://127.0.0.1:8099 and opens the Triage
 view. The cluster is simulated, but everything runs through the real detector, so what
 you see is what the board would say about a real cluster in that state. The **Simulate**
-menu in the top bar has the same four presets plus all 22 single scenarios, and the left
+menu in the top bar has the same five presets plus all 24 single scenarios, and the left
 rail explains what each active scenario should show.
 
 ### Demo (no cluster)
@@ -392,6 +426,7 @@ An open page notices a redeploy and offers a reload.
 | `GALAXY_RESOLVE_EXTERNAL_HOSTS` | `true` | DNS-resolve config hostnames so observed external IPs get names |
 | `GALAXY_EVENT_WINDOW_SECONDS` | `3600` | warning events older than this are ignored |
 | `GALAXY_POD_LOGS` | `false` | let the drawer fetch the last 80 log lines of a container (also needs `deploy/k8s/optional-pod-logs.yaml`) |
+| `GALAXY_SIZING_MIN_HISTORY_SECONDS` | `3600` | how long a workload must be watched before it is called over-provisioned |
 | `GALAXY_GROUP_BY` | `prefix` | how projects roll up into business units on large estates: `prefix`, `label:<namespace label key>` or `none` |
 | `GALAXY_GROUP_SEPARATOR` | `-` | separator for `prefix` |
 | `GALAXY_DETAIL_LIMIT` / `GALAXY_PROJECT_LIMIT` / `GALAXY_NODE_BUDGET` | `150` / `60` / `320` | workloads drawn individually before rolling up to projects; projects before rolling up to units; most things drawn at once |
@@ -446,7 +481,8 @@ Node ids: `wl:<ns>/<Kind>/<name>`, `entry:<ns>/<Kind>/<name>`, `svc:<ns>/<name>`
 - Collector RBAC is read-only cluster-wide and excludes Secrets. Pod templates
   (which can hold env values) never leave the process; rollout diffs name the env
   variables that changed, never their values.
-- Diagnostics read Events, PersistentVolumeClaims, ResourceQuotas, NetworkPolicies,
+- Sizing advice is text and commands to copy. Nothing is ever applied to the cluster.
+- Diagnostics read Events, PersistentVolumeClaims, ResourceQuotas, LimitRanges, NetworkPolicies,
   ControllerRevisions and (OpenShift) cluster operators. Event and status messages
   are shown as the API serves them.
 - **Pod logs are off by default.** Reading them needs an extra ClusterRole
@@ -479,6 +515,8 @@ Node ids: `wl:<ns>/<Kind>/<name>`, `entry:<ns>/<Kind>/<name>`, `svc:<ns>/<name>`
 - **Single-node clusters.** Node-versus-peer network checks need at least two
   reporting nodes and are skipped otherwise.
 - **No history.** Every number is current (last 5 min for mesh, last report for the agent).
+  The one exception is peak CPU and memory per container, kept in memory for up to a day
+  for the sizing advice and lost when the collector restarts.
 - Conntrack byte rates need `net.netfilter.nf_conntrack_acct=1` on nodes;
   without it, UDP edges show connections only.
 - Config inference is conservative (bare names only count in address-like

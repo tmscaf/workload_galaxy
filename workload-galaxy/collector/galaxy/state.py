@@ -11,6 +11,7 @@ from .config import Settings
 from .flows import FlowStore
 from .probes import Prober
 from .prom import PrometheusSource
+from .sizing import UsageHistory
 from .topology import Builder, public
 
 log = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ class GalaxyState:
         self.updated_at = 0.0
         self.build_seconds = 0.0
         self._lock = threading.Lock()
+        self.usage = UsageHistory()          # peak usage per container, for sizing advice
         self._index = None
         self._views: dict[tuple, tuple] = {}
         self._refresh_lock = threading.Lock()
@@ -102,7 +104,10 @@ class GalaxyState:
                           flow_idle_seconds=self.settings.flow_idle_seconds,
                           internal_cidrs=self.settings.internal_cidrs,
                           event_window_seconds=self.settings.event_window_seconds,
-                          group_by=self.settings.group_by, group_separator=self.settings.group_separator)
+                          group_by=self.settings.group_by, group_separator=self.settings.group_separator,
+                          usage_history=self.usage,
+                          # The simulation has no past to wait for: show the advice straight away.
+                          sizing_min_history=0.0 if demo else self.settings.sizing_min_history)
         graph = public(builder.build())
         if self.settings.resolve_external_hosts and not demo:
             self._resolve_hosts(graph.get("externalHosts", []))

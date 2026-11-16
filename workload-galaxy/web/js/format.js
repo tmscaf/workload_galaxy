@@ -6,6 +6,18 @@ export function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// "Ways to fix it": the sizing advisor's options for a finding, each with what it is based on, what
+// would stop it working, and a command to copy. Shared by the Triage cards and the drawer.
+export function optionsHtml(f) {
+  if (!f.options || !f.options.length) return '';
+  const row = (o) => `<li><div class="w-t">${esc(o.title)}${o.admin ? '<span class="w-adm" title="Needs rights most project owners do not have">cluster admin</span>' : ''}</div>
+    ${o.detail ? `<p>${esc(o.detail)}</p>` : ''}
+    ${o.note ? `<p class="w-note">${esc(o.note)}</p>` : ''}
+    ${o.command ? `<div class="cmd"><code>${esc(o.command)}</code><button class="link" data-copy="${esc(o.command)}">copy</button></div>` : ''}</li>`;
+  return `<div class="ways"><div class="ways-h">Ways to fix it</div><ol>${f.options.map(row).join('')}</ol>
+    ${f.optionsNote ? `<p class="w-foot">${esc(f.optionsNote)}</p>` : ''}</div>`;
+}
+
 export function fmtNum(n) {
   if (n == null || Number.isNaN(n)) return '–';
   const a = Math.abs(n);

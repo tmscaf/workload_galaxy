@@ -351,7 +351,7 @@ def unschedulable(w: World) -> dict:
     for i in range(2):
         pod = w.add_pod("data/order-worker", node=None, phase="Pending", ready=False, age=120,
                         message="0/3 nodes are available: 3 Insufficient cpu.")
-        pod["spec"]["containers"][0]["resources"]["requests"]["cpu"] = "6"
+        pod["spec"]["containers"][0]["resources"]["requests"]["cpu"] = "14"     # a typo for 1.4: fits nowhere
     return {
         "focus": "host:(unscheduled)",
         "layers": {
@@ -580,7 +580,14 @@ def quota_exceeded(w: World) -> dict:
     key = "payments/payments-api"
     w.scale(key, 4)
     q = w.objs["resourcequotas"][0]
-    q["status"]["used"] = {"limits.memory": "7936Mi", "limits.cpu": "6500m", "pods": "6"}
+    q["status"]["used"] = {"limits.memory": "7936Mi", "limits.cpu": "6500m", "pods": "8"}
+    # What fills the quota: a batch service limited to far more memory than it uses.
+    sb = w.add_workload("payments", "settlement-batch", "Deployment", cpu_req=0.25, mem_req_mi=512, cpu_limit=0.5,
+                        mem_limit_mi=1664, image="quay.io/acme/settlement-batch:2.3.0")
+    sb["spec"]["replicas"] = 2
+    for i, node in enumerate(w.node_names()[:2]):
+        w.add_pod("payments/settlement-batch", node=node, owner=sb["_owner"], container=sb["_container"],
+                  usage=(0.08, 300 + 12 * i), age=86400 * 6)
     dep = w.controller(key)[1]
     msg = ('pods "payments-api-7c9d8-" is forbidden: exceeded quota: compute, requested: limits.memory=512Mi, '
            'used: limits.memory=7936Mi, limited: limits.memory=8Gi')
@@ -761,7 +768,47 @@ def operator_degraded(w: World) -> dict:
 
 
 # Curated combinations for showing what the board can do: each tells one kind of story.
+def hpa_maxed(w: World) -> dict:
+    key = "storefront/api-gateway"
+    hpa = next(h for h in w.objs["hpas"] if h["metadata"]["name"] == "api-gateway")
+    hpa["spec"]["metrics"] = [{"type": "Resource", "resource": {"name": "cpu", "target": {
+        "type": "Utilization", "averageUtilization": 70}}}]
+    hpa["status"]["currentMetrics"] = [{"type": "Resource", "resource": {"name": "cpu", "current": {
+        "averageUtilization": 118}}}]
+    for p in w.pods_of(key):
+        k = f"{p['metadata']['namespace']}/{p['metadata']['name']}"
+        if k in w.usage:
+            w.usage[k] = (0.295, w.usage[k][1])
+    w.mesh_slow[key] = 1.6
+    return _guide("wl:storefront/Deployment/api-gateway",
+                  "Saturation: 'Autoscaler pinned at its maximum (3 replicas)' with CPU at 118% against a 70% target. "
+                  "Ways to fix it: the maxReplicas the load calls for, and whether the nodes and quota have room.",
+                  "api-gateway is amber: it wants more replicas than its autoscaler may create.",
+                  "All three pods are busy; none is failing.",
+                  "Everything behind the gateway gets slower at peak.")
+
+
+def oversized(w: World) -> dict:
+    rb = w.add_workload("data", "report-builder", "Deployment", cpu_req=4, mem_req_mi=8 * GI, cpu_limit=6,
+                        mem_limit_mi=8 * GI, image="quay.io/acme/report-builder:5.1.0")
+    rb["spec"]["replicas"] = 2
+    for i, node in enumerate(w.node_names()[1:3]):
+        w.add_pod("data/report-builder", node=node, owner=rb["_owner"], container=rb["_container"],
+                  usage=(0.3 + 0.02 * i, 1100 + 40 * i), age=86400 * 20)
+    return _guide("wl:data/Deployment/report-builder",
+                  "Right-sizing (an informational entry, not a problem): report-builder reserves 8 CPU and 16 GiB "
+                  "across two pods and uses about a tenth of it. Ways to fix it gives the request to set.",
+                  "report-builder is green: nothing is wrong with it. It is what stops others from fitting.",
+                  "Its two pods are healthy.",
+                  "No impact.",
+                  "Each node's reservation gauge is far ahead of its usage line.")
+
+
 PRESETS = [
+    {"id": "sizing", "title": "Wrong-sized workloads",
+     "summary": "Limits too small, requests too big: an OOM loop, a throttled service, an exhausted quota, an "
+                "autoscaler at its ceiling, a job no node can hold, and a service reserving ten times what it uses.",
+     "scenarios": ["oom-loop", "quota-exceeded", "memory-reservations", "hpa-maxed", "oversized"]},
     {"id": "deploy-failures", "title": "A bad release day",
      "summary": "Six deployments fail six different ways: bad image tag, missing ConfigMap, crash on start, "
                 "exhausted quota, security policy, failing readiness probe.",
@@ -839,6 +886,10 @@ SCENARIOS: dict[str, Scenario] = {s.id: s for s in [
              route_broken),
     Scenario("failed-job", "CronJob run failed",
              "nightly-export hit its backoff limit last night.", ("services",), failed_job),
+    Scenario("hpa-maxed", "Autoscaler at its ceiling",
+             "api-gateway runs at 118% CPU against a 70% target, pinned at maxReplicas 3.", ("services",), hpa_maxed),
+    Scenario("oversized", "Reserves far more than it uses",
+             "report-builder holds 8 CPU and 16 GiB of reservations and uses a tenth of it.", ("hosts",), oversized),
     Scenario("operator-degraded", "Platform: operator degraded + node update",
              "The ingress operator is degraded while the worker pool is being updated.", ("hosts",), operator_degraded),
 ]}

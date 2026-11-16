@@ -23,7 +23,7 @@ rules:
   # own explanations; claims and quotas explain pods that never appear. (Pod logs are NOT granted here:
   # see optional-pod-logs.yaml.)
   - apiGroups: [""]
-    resources: [events, persistentvolumeclaims, resourcequotas]
+    resources: [events, persistentvolumeclaims, resourcequotas, limitranges]
     verbs: [get, list, watch]
   - apiGroups: [networking.k8s.io]
     resources: [networkpolicies]
