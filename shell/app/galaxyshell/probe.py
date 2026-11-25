@@ -80,8 +80,9 @@ def check(module: dict, verify: bool = False) -> dict:
 
 
 class Prober:
-    def __init__(self, modules: list[dict], seconds: int = 20, verify: bool = False, checker=check):
+    def __init__(self, modules: list[dict], seconds: int = 20, verify: bool = False, checker=check, enabled=None):
         self.modules, self.seconds, self.verify, self._check = modules, seconds, verify, checker
+        self.enabled = enabled or (lambda _mid: True)      # a module that is turned off is not asked anything
         self.status: dict[str, dict] = {}
         self.checked_at = 0.0
         self._lock = threading.Lock()
@@ -99,12 +100,13 @@ class Prober:
             self._stop.wait(self.seconds)
 
     def refresh(self) -> None:
-        if not self.modules:
-            return
-        with ThreadPoolExecutor(max_workers=min(8, len(self.modules))) as pool:
-            results = list(pool.map(lambda m: self._check(m, self.verify), self.modules))
+        on = [m for m in self.modules if self.enabled(m["id"])]
+        results = []
+        if on:
+            with ThreadPoolExecutor(max_workers=min(8, len(on))) as pool:
+                results = list(pool.map(lambda m: self._check(m, self.verify), on))
         with self._lock:
-            self.status = {m["id"]: r for m, r in zip(self.modules, results)}
+            self.status = {m["id"]: r for m, r in zip(on, results)}
             self.checked_at = time.time()
 
     def snapshot(self) -> list[dict]:
@@ -112,5 +114,10 @@ class Prober:
             status, at = dict(self.status), self.checked_at
         blank = {"ok": None, "error": None, "version": "", "mode": "", "name": "", "problems": None, "critical": None,
                  "level": "off", "stale": None}
-        return [{"id": m["id"], "title": m["title"], "summary": m["summary"], "url": m["url"],
-                 **status.get(m["id"], blank), "checkedS": round(time.time() - at) if at else None} for m in self.modules]
+        out = []
+        for m in self.modules:
+            on = bool(self.enabled(m["id"]))
+            out.append({"id": m["id"], "title": m["title"], "summary": m["summary"], "url": m["url"], "enabled": on,
+                        **(status.get(m["id"], blank) if on else blank),
+                        "checkedS": round(time.time() - at) if at and on else None})
+        return out

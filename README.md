@@ -36,6 +36,9 @@ account, how things are grouped. It is behind one admin sign-in; a module's form
 the settings the module declares, values can be tested before they are saved, and passwords are
 never shown back. Saved settings take effect at once, with no redeploy.
 
+Each module also has a switch there. Turn off the ones you do not use and they leave the
+drop-down; turn one on and it is back.
+
 ![The settings area with a module's form](docs/screenshots/suite-settings.png)
 
 All three modules are configured this way. ESXi applies a change at once; Kubernetes and

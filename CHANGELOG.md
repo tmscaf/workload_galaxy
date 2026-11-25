@@ -4,6 +4,15 @@ The suite as a whole. Each part keeps its own, with the detail:
 [Kubernetes](modules/kubernetes/CHANGELOG.md) · [Network](modules/network/CHANGELOG.md) ·
 [ESXi](modules/esxi/CHANGELOG.md).
 
+## Unreleased
+
+Suite bar 0.3.0.
+
+- **Modules can be turned on and off from Settings.** Each module has a switch. A module that is
+  off leaves the drop-down and is no longer checked; it stays in Settings, where it can be set
+  up and turned back on. `GALAXY_MODULES_OFF` sets which modules start off.
+- The suite bar's Kubernetes base now includes a small volume, where those choices are kept.
+
 ## 0.1.0
 
 The first release of Workload Galaxy as a suite: Kubernetes module 0.12.0, Network module 0.3.0,

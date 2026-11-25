@@ -3,16 +3,20 @@
 // The module in view is kept in the address (#esxi) so a link or a reload comes back to it, and
 // remembered for the next visit. Modules are shown through their embed mode (?embed=1).
 // #settings (or #settings/esxi) opens the settings area in place of the module.
+// A module that is turned off (in Settings) stays out of the selector; Settings still lists it.
 import { SettingsView } from './settings.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-const state = { modules: [], selected: null, shown: null, every: 20, loaded: false, settings: false };
+const state = { modules: [], selected: null, shown: null, every: 20, loaded: false, settings: false, persistent: true };
+const turnedOn = () => state.modules.filter((m) => m.enabled !== false);
 const button = $('modButton'), menu = $('modMenu'), frame = $('frame'), notice = $('notice'), settingsEl = $('settings');
 const settingsView = new SettingsView(settingsEl, {
   modules: () => state.modules,
+  persistent: () => state.persistent,
   onModule(id) { history.replaceState(null, '', `#settings/${id}`); },
+  onSwitched() { load(); setTimeout(load, 1500); },   // the selector follows at once; a module just turned on reports in shortly
   onChanged() { setTimeout(load, 1500); },          // the module starts a fresh reading; show its new state soon
 });
 
@@ -48,7 +52,7 @@ function embedUrl(m) {
 }
 
 function pick(id, { remember = true } = {}) {
-  if (!state.modules.some((m) => m.id === id)) return;
+  if (!turnedOn().some((m) => m.id === id)) return;
   state.selected = id;
   if (remember && state.settings) { state.settings = false; $('settingsButton').setAttribute('aria-pressed', 'false'); settingsEl.hidden = true; }
   if (remember) {
@@ -59,29 +63,31 @@ function pick(id, { remember = true } = {}) {
 }
 
 function initialChoice() {
-  const ids = state.modules.map((m) => m.id);
+  const on = turnedOn();
+  const ids = on.map((m) => m.id);
   const fromHash = location.hash.slice(1).replace(/^settings\/?/, '');
   if (ids.includes(fromHash)) return fromHash;
   let last = null;
   try { last = localStorage.getItem('wg.module'); } catch { /* storage unavailable */ }
   if (ids.includes(last)) return last;
-  return (state.modules.find((m) => m.ok) || state.modules[0])?.id || null;
+  return (on.find((m) => m.ok) || on[0])?.id || null;
 }
 
 function render() {
-  const cur = state.modules.find((m) => m.id === state.selected) || null;
+  const on = turnedOn();
+  const cur = on.find((m) => m.id === state.selected) || null;
 
   // The selector button: the module in view, its state, and how much it has waiting.
-  $('modName').textContent = cur ? cur.title : state.loaded ? 'No modules' : 'Modules';
+  $('modName').textContent = cur ? cur.title : !state.loaded ? 'Modules' : state.modules.length ? 'All modules are off' : 'No modules';
   $('modDot').className = `dot ${cur ? levelOf(cur) : 'off'}`;
   const badge = $('modBadge');
   badge.hidden = !(cur && cur.problems);
   badge.textContent = cur?.problems || '';
   badge.className = `badge ${cur?.critical ? 'critical' : ''}`;
   badge.title = cur?.problems ? `${cur.problems} thing${cur.problems === 1 ? '' : 's'} to look at in ${cur.title}` : '';
-  button.disabled = !state.modules.length;
+  button.disabled = !on.length;
 
-  menu.innerHTML = state.modules.map((m) => `<li role="option" tabindex="-1" data-id="${esc(m.id)}" aria-selected="${m.id === state.selected}">
+  menu.innerHTML = on.map((m) => `<li role="option" tabindex="-1" data-id="${esc(m.id)}" aria-selected="${m.id === state.selected}">
       <span class="dot ${levelOf(m)}"></span>
       <span class="t">${esc(m.title)}${m.name ? `<small>${esc(m.name)}</small>` : ''}</span>
       <span class="r">${statusText(m)}</span>
@@ -105,10 +111,13 @@ function render() {
   if (state.settings) { frame.hidden = true; notice.hidden = true; return; }
   if (!state.modules.length) {
     showNotice('No modules are set up', 'Tell the shell where each module runs, as id=URL pairs in the order they should be listed:',
-      'GALAXY_MODULES=kubernetes=http://host:8090,network=http://host:8091,esxi=http://host:8092');
+      { code: 'GALAXY_MODULES=kubernetes=http://host:8090,network=http://host:8091,esxi=http://host:8092' });
+  } else if (!on.length) {
+    showNotice('Every module is turned off', 'Turn on the ones you use in Settings. A module that is off is not listed here and is not checked.',
+      { button: 'Open Settings', run: () => showSettings(true) });
   } else if (cur && cur.ok === false) {
     showNotice(`${cur.title} is not reachable`, `The shell could not read ${cur.url} (${cur.error || 'no answer'}). It checks again every ${state.every} seconds and will show the module as soon as it answers.`,
-      null, true);
+      { button: 'Check again now', run: () => load() });
   } else if (cur) {
     notice.hidden = true;
     frame.hidden = false;
@@ -117,14 +126,14 @@ function render() {
   }
 }
 
-function showNotice(title, text, code = null, retry = false) {
+function showNotice(title, text, { code = null, button: label = null, run = null } = {}) {
   frame.hidden = true;
   state.shown = null;
   frame.removeAttribute('src');
   notice.hidden = false;
   notice.innerHTML = `<h1>${esc(title)}</h1><p>${esc(text)}${code ? `<code>${esc(code)}</code>` : ''}</p>
-    ${retry ? '<button class="btn" id="retry">Check again now</button>' : ''}`;
-  $('retry')?.addEventListener('click', () => load());
+    ${label ? `<button class="btn" id="noticeAct">${esc(label)}</button>` : ''}`;
+  if (run) $('noticeAct')?.addEventListener('click', run);
 }
 
 async function load() {
@@ -134,17 +143,21 @@ async function load() {
     const data = await res.json();
     state.modules = data.modules || [];
     state.every = data.checkEverySeconds || 20;
+    state.persistent = data.persistent !== false;
     const first = !state.loaded;
     state.loaded = true;
-    if (first || !state.modules.some((m) => m.id === state.selected)) {
+    if (first || !turnedOn().some((m) => m.id === state.selected)) {      // first visit, or the module in view was turned off
       state.selected = initialChoice();
       if (state.selected) pick(state.selected, { remember: false });
     }
     if (first && location.hash.startsWith('#settings')) showSettings(true, location.hash.split('/')[1]);
-    else if (state.settings && !settingsEl.querySelector('form')) settingsView.render();      // keep the list of modules fresh, never a form being typed in
+    else if (state.settings) settingsView.refresh();      // keeps the list of modules fresh, and leaves a form being typed in alone
     render();
   } catch (err) {
-    if (!state.loaded) { state.loaded = true; showNotice('The shell is not answering', `Could not load the list of modules: ${err.message}.`, null, true); }
+    if (!state.loaded) {
+      state.loaded = true;
+      showNotice('The shell is not answering', `Could not load the list of modules: ${err.message}.`, { button: 'Check again now', run: () => load() });
+    }
   }
 }
 

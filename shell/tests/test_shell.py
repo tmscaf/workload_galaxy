@@ -156,3 +156,81 @@ def test_wrong_passwords_lock_the_sign_in_and_an_unreachable_module_is_said_plai
         c.post("/api/v1/login", json={"password": "pw"}, headers=ACT)
         down = c.get("/api/v1/modules/esxi/settings")
         assert down.status_code == 502 and down.json()["detail"] == "ESXi is not reachable (connection refused)"
+
+
+# ---------------------------------------------------------------------------------------------- turning modules on and off
+def test_modules_start_on_unless_named_off_and_a_choice_is_kept(tmp_path):
+    import json
+    import os
+    from galaxyshell.config import load_settings
+    from galaxyshell.switches import Switches
+    s = load_settings({"modules": "kubernetes=http://k,network=http://n,esxi=http://e", "modules_off": "Network, esxi",
+                       "data_dir": str(tmp_path)}, environ={})
+    sw = Switches(s.modules_off, s.data_dir)
+    assert sw.persistent and [sw.enabled(m["id"]) for m in s.module_list] == [True, False, False]
+    sw.set("esxi", True)                # a choice wins over how the shell was deployed, both ways
+    sw.set("kubernetes", False)
+    saved = tmp_path / "shell.json"
+    assert json.loads(saved.read_text()) == {"modules": {"esxi": {"enabled": True}, "kubernetes": {"enabled": False}}}
+    assert oct(os.stat(saved).st_mode & 0o777) == "0o600"
+    again = Switches(s.modules_off, s.data_dir)                                   # after a restart
+    assert [again.enabled(i) for i in ("kubernetes", "network", "esxi", "new-one")] == [False, False, True, True]
+    saved.write_text("{not json")
+    assert Switches([], str(tmp_path)).enabled("kubernetes") is True              # a damaged file is ignored, not fatal
+    memory = Switches(["esxi"])
+    memory.set("esxi", True)
+    assert not memory.persistent and memory.enabled("esxi") is True
+
+
+def test_a_module_turned_off_leaves_the_list_and_is_not_checked(tmp_path):
+    from galaxyshell.config import load_settings
+    from galaxyshell.main import create_app
+    from galaxyshell.probe import Prober
+    settings = load_settings({"modules": "kubernetes=http://k:8090,esxi=http://e:8092", "admin_password": "pw",
+                              "data_dir": str(tmp_path)}, environ={})
+    asked = []
+
+    def checker(m, verify):
+        asked.append(m["id"])
+        return {"ok": True, "error": None, "version": "1.0.0", "mode": "live", "name": "", "problems": 2, "critical": 0,
+                "level": "warning", "stale": None}
+    prober = Prober(settings.module_list, seconds=3600, checker=checker)
+    listed = lambda c: {m["id"]: m for m in c.get("/api/v1/modules").json()["modules"]}      # noqa: E731
+    with TestClient(create_app(settings, prober)) as c:
+        prober.refresh()
+        assert all(m["enabled"] and m["problems"] == 2 for m in listed(c).values()) and c.get("/api/v1/modules").json()["persistent"]
+        off = {"enabled": False}
+        assert c.put("/api/v1/modules/esxi", json=off, headers=ACT).status_code == 401        # needs the sign-in
+        c.post("/api/v1/login", json={"password": "pw"}, headers=ACT)
+        assert c.put("/api/v1/modules/esxi", json=off).status_code == 403                      # and the action header
+        assert c.put("/api/v1/modules/nope", json=off, headers=ACT).status_code == 404
+        assert c.put("/api/v1/modules/esxi", json={"enabled": "no"}, headers=ACT).status_code == 400
+        assert listed(c)["esxi"]["enabled"] is True                                            # none of those changed anything
+        done = c.put("/api/v1/modules/esxi", json=off, headers=ACT)
+        assert done.status_code == 200 and done.json() == {"id": "esxi", "title": "ESXi", "enabled": False, "persistent": True}
+        esxi = listed(c)["esxi"]              # still listed, so Settings can turn it back on, with nothing said about its state
+        assert (esxi["enabled"], esxi["ok"], esxi["problems"], esxi["version"], esxi["checkedS"]) == (False, None, None, "", None)
+        del asked[:]
+        prober.refresh()
+        assert asked == ["kubernetes"]                                                         # the shell stops asking it
+        assert c.put("/api/v1/modules/esxi", json={"enabled": True}, headers=ACT).json()["enabled"] is True
+        prober.refresh()
+        assert listed(c)["esxi"]["problems"] == 2
+        c.put("/api/v1/modules/kubernetes", json=off, headers=ACT)
+    # a restart keeps the choice
+    with TestClient(create_app(settings, Prober(settings.module_list, seconds=3600, checker=checker))) as c:
+        assert {i: m["enabled"] for i, m in listed(c).items()} == {"kubernetes": False, "esxi": True}
+
+
+def test_a_choice_that_cannot_be_saved_is_refused_and_changes_nothing(tmp_path):
+    from galaxyshell.config import load_settings
+    from galaxyshell.main import create_app
+    from galaxyshell.probe import Prober
+    blocked = tmp_path / "file-not-folder"
+    blocked.write_text("")
+    settings = load_settings({"modules": "esxi=http://e:8092", "admin_password": "pw", "data_dir": str(blocked)}, environ={})
+    with TestClient(create_app(settings, Prober(settings.module_list, seconds=3600, checker=lambda m, v: {"ok": True}))) as c:
+        c.post("/api/v1/login", json={"password": "pw"}, headers=ACT)
+        failed = c.put("/api/v1/modules/esxi", json={"enabled": False}, headers=ACT)
+        assert failed.status_code == 500 and "could not be saved" in failed.json()["detail"]
+        assert c.get("/api/v1/modules").json()["modules"][0]["enabled"] is True
