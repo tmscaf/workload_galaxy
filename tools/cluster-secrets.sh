@@ -43,6 +43,8 @@ GENERATED="GALAXY_ADMIN_PASSWORD GALAXY_SETTINGS_TOKEN K8S_AGENT_TOKEN"
 SECRETS=(
   "workload-galaxy-shell|workload-galaxy-shell-settings|admin-password=GALAXY_ADMIN_PASSWORD,settings-token=GALAXY_SETTINGS_TOKEN|deploy/workload-galaxy-shell"
   "esxi-galaxy|esxi-galaxy-settings|token=GALAXY_SETTINGS_TOKEN|deploy/esxi-galaxy"
+  "network-galaxy|network-galaxy-settings|token=GALAXY_SETTINGS_TOKEN|deploy/network-galaxy"
+  "workload-galaxy|workload-galaxy-settings|token=GALAXY_SETTINGS_TOKEN|deploy/workload-galaxy"
   "esxi-galaxy|esxi-galaxy-host|user=ESXI_USER,password=ESXI_PASSWORD|deploy/esxi-galaxy"
   "network-galaxy|network-galaxy-ntopng|user=NTOPNG_USER,password=NTOPNG_PASSWORD|deploy/network-galaxy"
   "network-galaxy|network-galaxy-unifi|user=UNIFI_USER,password=UNIFI_PASSWORD|deploy/network-galaxy"

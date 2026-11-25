@@ -188,6 +188,15 @@ def load_settings() -> Settings:
         log_level=os.environ.get("NETGALAXY_LOG_LEVEL", "INFO").upper(),
     )
     s.site = load_site(s.config_file)
+    # The same thing saved from the suite's Settings page wins over the file.
+    saved_site = os.environ.get("NETGALAXY_SITE", "").strip()
+    if saved_site:
+        try:
+            data = json.loads(saved_site)
+            if isinstance(data, dict):
+                s.site = data
+        except ValueError as err:
+            log.warning("ignoring the saved site details (not valid JSON): %s", err)
     if not s.syslog_allow and s.router_ip:
         s.syslog_allow = [s.router_ip]
     if not s.blocklist_senders and s.router_ip:

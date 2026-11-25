@@ -5,6 +5,7 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "collector"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "core", "py"))
 
 SITE = {
     "publicAddress": "192.0.2.1",

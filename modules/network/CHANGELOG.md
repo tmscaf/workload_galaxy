@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0
+
+- **Settings from the suite.** The router and ntopng login, your address ranges, the UniFi
+  controller, pings, blocking and tuning can be changed from the suite's Settings page. Saving
+  restarts the app in place, in a few seconds, with what was saved; nothing is redeployed. The
+  device inventory, block list and history are kept.
+- **Port forwards, device names and hosts as a setting.** What used to need a site file can be
+  pasted into Settings as JSON; it is checked before it is saved and wins over the file.
+- **Test connection** tries the ntopng login, and the UniFi controller if one is set, with what
+  is typed, without saving it.
+- **Passwords are write-only**, and a login's password is forgotten when its address or user
+  changes, so it is never sent somewhere new by accident.
+- **Changes need the settings token** (`NETGALAXY_SETTINGS_TOKEN`), which the suite shell
+  presents. Without one the app takes its settings from its environment only, as before, and
+  does not reveal them.
+- The app now uses the suite's shared core for settings, so its image is built from the
+  repository root (`docker build -f modules/network/Dockerfile .`).
+
 ## 0.2.0 — 2026-11-23
 
 - **Wi-Fi tab: where does a connection break?** New section fed by a UniFi controller and by pings.

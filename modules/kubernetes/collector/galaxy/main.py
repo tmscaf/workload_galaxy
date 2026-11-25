@@ -28,12 +28,17 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from galaxy_core import settingsapi
+
 from . import __build__, __version__
 from .config import load_settings
+from .fields import FIELDS, MANIFEST, PREFIX
 from .state import GalaxyState
 from .scale import collapse
 from .topology import filter_graph
 
+# What was saved from the suite's Settings page is laid over the environment before it is read.
+STORE, BASE_ENV = settingsapi.boot(FIELDS, PREFIX)
 settings = load_settings()
 logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("galaxy")
@@ -105,6 +110,52 @@ def meta():
             "updatedAt": state.updated_at or None, "refreshSeconds": settings.refresh_seconds,
             "error": state.error, "cluster": graph.get("cluster"), "sources": graph.get("sources"),
             "podLogs": settings.pod_logs or settings.mode == "demo"}
+
+
+# ---------------------------------------------------------------------------------------------- settings, for the suite
+def _test_settings(c) -> dict:
+    """Say what these settings would find: is the cluster being read, do the projects exist, does Prometheus answer."""
+    lines, ok = [], True
+    graph = state.current() or {}
+    if state.error and not graph:
+        ok = False
+        lines.append(f"The cluster cannot be read: {state.error}.")
+    else:
+        lines.append(f"Reading the cluster{' from inside it' if state.in_cluster else ''}: {len(graph.get('namespaces', []))} projects in view now.")
+    known = {n["name"] for n in graph.get("namespaces", [])}
+    if c.namespaces and known and settings.mode == c.mode and not settings.namespaces:
+        unknown = [n for n in c.namespaces if n not in known]
+        if unknown:
+            ok = False
+            lines.append(f"Not found among the projects in view: {', '.join(unknown)}.")
+    if c.prometheus_url:
+        import httpx
+        headers = {}
+        try:
+            if settings.prometheus_token_file:
+                with open(settings.prometheus_token_file, encoding="utf-8") as fh:
+                    headers["Authorization"] = f"Bearer {fh.read().strip()}"
+            verify = settings.prometheus_ca_file or c.prometheus_verify_tls
+            with httpx.Client(timeout=10, verify=verify, headers=headers) as http:
+                r = http.get(c.prometheus_url.rstrip("/") + "/api/v1/query", params={"query": "up"})
+            if r.status_code == 200:
+                lines.append("Prometheus answered.")
+            else:
+                ok = False
+                lines.append(f"Prometheus answered {r.status_code}.")
+        except (httpx.HTTPError, OSError) as err:
+            ok = False
+            lines.append(f"Prometheus is not reachable: {type(err).__name__}.")
+    return {"ok": ok, "message": " ".join(lines)}
+
+
+settingsapi.attach(app, api=settingsapi.RestartingSettings(STORE, BASE_ENV, tester=_test_settings, before_restart=lambda: state.stop()),
+                   token=os.environ.get(f"{PREFIX}_SETTINGS_TOKEN", ""), manifest=MANIFEST, mode=lambda: settings.mode)
+
+
+@app.get("/api/v1/module")
+def module_manifest():
+    return {**MANIFEST, "version": __version__, "build": __build__, "mode": settings.mode}
 
 
 @app.get("/api/v1/version")

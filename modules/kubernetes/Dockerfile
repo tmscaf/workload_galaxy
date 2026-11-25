@@ -9,14 +9,17 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends iproute2 util-linux conntrack \
  && rm -rf /var/lib/apt/lists/*
 
+# Built from the repository root, because the collector uses the shared core package:
+#   docker build -f modules/kubernetes/Dockerfile -t workload-galaxy .
 WORKDIR /app
-COPY collector/requirements.txt ./
+COPY modules/kubernetes/collector/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY VERSION ./VERSION
-COPY collector/galaxy ./galaxy
-COPY agent/agent.py ./agent.py
-COPY web ./web
+COPY modules/kubernetes/VERSION ./VERSION
+COPY core/py/galaxy_core ./galaxy_core
+COPY modules/kubernetes/collector/galaxy ./galaxy
+COPY modules/kubernetes/agent/agent.py ./agent.py
+COPY modules/kubernetes/web ./web
 
 # Version/build stamp (scripts/deploy-homelab.sh passes these; defaults keep plain `docker build` working).
 ARG GALAXY_VERSION=dev

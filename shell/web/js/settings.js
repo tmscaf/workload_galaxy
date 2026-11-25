@@ -136,7 +136,7 @@ export class SettingsView {
       ctl = `<span class="check"><input type="checkbox" id="${id}" name="${esc(x.name)}" ${x.value ? 'checked' : ''} ${dis}> <label for="${id}" style="padding:0;font-weight:400">On</label></span>`;
     } else if ((x.choices || []).length) {
       ctl = `<select id="${id}" name="${esc(x.name)}" ${dis}>${x.choices.map((c) => `<option ${c === x.value ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>`;
-    } else if (x.type === 'text') {
+    } else if (x.type === 'text' || x.type === 'json') {
       ctl = `<textarea id="${id}" name="${esc(x.name)}" spellcheck="false" ${dis}>${esc(x.value || '')}</textarea>`;
     } else if (x.type === 'int') {
       ctl = `<input type="number" id="${id}" name="${esc(x.name)}" value="${esc(x.value ?? '')}" ${x.minimum != null ? `min="${x.minimum}"` : ''} ${dis}>`;
@@ -204,7 +204,8 @@ export class SettingsView {
       } else {
         this.form = res;
         const forgot = (res.forgot || []).length ? ` ${res.forgot.join(', ')} was forgotten because what it belongs to changed: enter it again.` : '';
-        this.message = { cls: forgot ? 'warn' : 'ok', text: `Saved. The module is reading again with the new settings.${forgot}` };
+        const how = res.restarting ? 'The module is restarting with the new settings; give it a few seconds.' : 'The module is reading again with the new settings.';
+        this.message = { cls: forgot ? 'warn' : 'ok', text: `Saved. ${how}${forgot}` };
         this.ctx.onChanged();
       }
     } catch (err) {

@@ -4,6 +4,21 @@ The version lives in [`VERSION`](VERSION). Every deploy adds a UTC build stamp
 (`0.3.0-20261111.2318`), shown in the UI's version chip, `/api/v1/version`, the
 image tag and the `app.kubernetes.io/version` label in Rancher.
 
+## 0.12.0
+- **Settings from the suite.** Which projects to show or leave out, how they roll up, the
+  Prometheus address, the diagnosis switches (ConfigMap reading, pod logs, service checks) and
+  the tuning limits can be changed from the suite's Settings page. Saving restarts the collector
+  in place, in a few seconds, with what was saved; nothing is redeployed.
+- **Test** reports whether the cluster is being read, whether the projects named exist, and
+  whether Prometheus answers, without saving anything.
+- **Changes need the settings token** (`GALAXY_SETTINGS_TOKEN`), which the suite shell presents.
+  Without one the collector takes its settings from its environment only, as before, and does
+  not reveal them. The agent token and file paths cannot be changed from the page.
+- **Saved settings need a data folder to outlive the pod** (`GALAXY_DATA_DIR`; the home-lab
+  overlay adds a small volume). Without one they last until the pod is replaced.
+- The collector now uses the suite's shared core for settings, so its image is built from the
+  repository root (`docker build -f modules/kubernetes/Dockerfile .`).
+
 ## 0.11.0
 - **Ways to fix it.** A workload that is the wrong size now comes with numbered options: what
   to change, to what value, why, and the command to copy. Covers OOM kills, memory near its

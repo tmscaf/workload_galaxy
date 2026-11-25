@@ -20,6 +20,7 @@
     POST /api/v1/wifi/watch   ping a device every few seconds instead of every half minute   {mac, on}
     POST /api/v1/wifi/test    ping a device, its access point, the router and the internet side by side, now   {mac}
     POST /api/v1/vpn-status   the router's sync script reports the VPN server's client list (token + router only)
+    GET|PUT /api/v1/settings, POST /api/v1/settings/test   the suite's Settings page (settings token only)
     GET /healthz /readyz
     GET /                     the UI (works under any path prefix)
 
@@ -43,16 +44,21 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from galaxy_core import settingsapi
+
 from . import __build__, __version__
 from .auth import ACTION_HEADER, COOKIE, SESSION_SECONDS, Auth
 from .blocks import BlockError
 from .config import load_settings
+from .fields import FIELDS, MANIFEST, PREFIX
 from .devices import GROUPS
 from .findings import CATEGORIES
 from .graphops import filter_graph
 from .scale import collapse
 from .state import NetState
 
+# What was saved from the suite's Settings page is laid over the environment before it is read.
+STORE, BASE_ENV = settingsapi.boot(FIELDS, PREFIX)
 settings = load_settings()
 logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -424,6 +430,49 @@ def _summarise(ip: str, rows: list) -> dict:
     return {"ip": ip, "sent": len(rows), "received": len(got), "lossPct": round(100.0 * (len(rows) - len(got)) / len(rows), 1),
             "minMs": got[0] if got else None, "p50Ms": got[len(got) // 2] if got else None, "maxMs": got[-1] if got else None,
             "jitterMs": None, "samples": rows}
+
+
+# ---------------------------------------------------------------------------------------------- settings, for the suite
+def _test_settings(c) -> dict:
+    """Try the router and the Wi-Fi controller with these settings, without saving them."""
+    from .ntopng import Ntopng, NtopngError
+    from .unifi import Unifi, UnifiError
+    need = [label for label, value in (("ntopng address", c.ntopng_url), ("ntopng user", c.ntopng_user),
+                                      ("ntopng password", c.ntopng_password)) if not value]
+    if need:
+        return {"ok": False, "message": f"Still needed: {', '.join(need)}."}
+    lines, ok = [], True
+    try:
+        iface = Ntopng(c.ntopng_url.rstrip("/"), c.ntopng_user, c.ntopng_password, ifid=c.ntopng_ifid, verify=c.ntopng_verify_tls,
+                       timeout=10).interface()
+        lines.append(f"ntopng answered: {iface.get('num_local_hosts', iface.get('num_hosts', 0))} devices, "
+                     f"{iface.get('num_flows', 0)} connections.")
+    except NtopngError as err:
+        ok = False
+        lines.append(f"ntopng: {err}")
+    if c.unifi_url:
+        if not (c.unifi_user and c.unifi_password):
+            ok = False
+            lines.append("UniFi: the controller user and password are needed.")
+        else:
+            try:
+                snap = Unifi(c.unifi_url.rstrip("/"), c.unifi_user, c.unifi_password, site=c.unifi_site or "default",
+                             verify=c.unifi_verify_tls, timeout=10).snapshot()
+                lines.append(f"UniFi answered: {len(snap.get('aps') or snap.get('devices') or [])} access points and switches, "
+                             f"{len(snap.get('clients') or [])} Wi-Fi devices.")
+            except UnifiError as err:
+                ok = False
+                lines.append(f"UniFi: {err}")
+    return {"ok": ok, "message": " ".join(lines)}
+
+
+settingsapi.attach(app, api=settingsapi.RestartingSettings(STORE, BASE_ENV, tester=_test_settings, before_restart=lambda: state.stop()),
+                   token=os.environ.get(f"{PREFIX}_SETTINGS_TOKEN", ""), manifest=MANIFEST, mode=lambda: settings.mode)
+
+
+@app.get("/api/v1/module")
+def module_manifest():
+    return {**MANIFEST, "version": __version__, "build": __build__, "mode": settings.mode}
 
 
 @app.get("/api/v1/demo/scenarios")

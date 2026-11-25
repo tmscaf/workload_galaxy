@@ -28,21 +28,20 @@ settings from its environment only and refuses changes.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import logging
 import mimetypes
 import os
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from . import settingsapi
 from .graphops import filter_graph
 from .scale import collapse
-from .settings import SettingsError
 from .state import State
 
 log = logging.getLogger(__name__)
@@ -217,56 +216,8 @@ class Galaxy:
             raise HTTPException(404, detail="this module has no scenarios")
 
         if self._settings_api is not None:
-            self._settings_routes()
-
-    # ------------------------------------------------------------------ settings, for the suite
-    def _may_change(self, request: Request) -> None:
-        if not self._settings_token:
-            raise HTTPException(403, detail="this module takes its settings from where it is deployed (no settings token is set)")
-        sent = request.headers.get("authorization", "")
-        token = sent[7:] if sent.lower().startswith("bearer ") else ""
-        if not hmac.compare_digest(token.encode(), self._settings_token.encode()):
-            raise HTTPException(401, detail="the settings token is missing or wrong")
-
-    def _settings_routes(self) -> None:
-        app, api = self.app, self._settings_api
-
-        async def values(request: Request) -> dict:
-            try:
-                body = await request.json()
-            except ValueError:
-                raise HTTPException(400, detail="send JSON") from None
-            return (body or {}).get("values") if isinstance(body, dict) and "values" in body else body
-
-        @app.get("/api/v1/settings")
-        def settings(request: Request):
-            # Current values (addresses, account names) are for the suite only. Without a token the
-            # module says what it takes, not what it has.
-            desc = api.describe()
-            if self._settings_token:
-                self._may_change(request)
-            else:
-                desc["fields"] = [{**f, "value": None, "set": None, "source": None} for f in desc["fields"]]
-                desc["missing"] = []
-            return {"module": {"id": self.manifest.get("id"), "title": self.manifest.get("title")},
-                    "writable": bool(self._settings_token), "mode": self.mode, **desc}
-
-        @app.put("/api/v1/settings")
-        async def save_settings(request: Request):
-            self._may_change(request)
-            try:
-                result = api.apply(await values(request))
-            except SettingsError as err:
-                raise HTTPException(400, detail=str(err)) from err
-            return {"saved": True, **result, "writable": True, "mode": self.mode, **api.describe()}
-
-        @app.post("/api/v1/settings/test")
-        async def test_settings(request: Request):
-            self._may_change(request)
-            try:
-                return api.test(await values(request))
-            except SettingsError as err:
-                raise HTTPException(400, detail=str(err)) from err
+            settingsapi.attach(app, api=self._settings_api, token=self._settings_token, manifest=self.manifest,
+                               mode=lambda: self.mode)
 
     # ------------------------------------------------------------------ UI
     # The page loads its code from /v/<build>/..., so every deploy has new asset URLs and a browser can

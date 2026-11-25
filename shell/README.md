@@ -31,7 +31,8 @@ module needs no page of its own.
   Five wrong passwords from one address lock sign-in for five minutes.
 - **Test connection** tries what is typed without saving it.
 - **Save and apply** hands the settings to the module, which keeps them in its own data folder
-  and starts using them at once. The shell stores none of it.
+  and starts using them: ESXi at once, Kubernetes and Network after restarting themselves, which
+  takes a few seconds. The shell stores none of it.
 - **Passwords are write-only.** The page is told whether one is set, never what it is.
 - **Each value says where it comes from:** saved here, set where the module is deployed, or
   its default. Saved values win.
@@ -41,14 +42,14 @@ It takes two secrets to turn on:
 | | On the shell | On each module |
 |---|---|---|
 | Admin password | `GALAXY_ADMIN_PASSWORD` | |
-| Settings token (the same value everywhere) | `GALAXY_SETTINGS_TOKEN` | its own, e.g. `ESXIGALAXY_SETTINGS_TOKEN` |
+| Settings token (the same value everywhere) | `GALAXY_SETTINGS_TOKEN` | `GALAXY_SETTINGS_TOKEN` (Kubernetes), `NETGALAXY_SETTINGS_TOKEN`, `ESXIGALAXY_SETTINGS_TOKEN` |
 
 The token is what a module trusts: it accepts settings only from a caller that presents it, and
 a browser never sees it. Without an admin password the area is off; without a token, settings
 cannot be read or changed from the suite and every module keeps what it was deployed with.
 
-A module that has no settings API yet (Kubernetes and Network today) is listed as configured
-where it is deployed.
+A module without a settings API (an older version, say) is listed as configured where it is
+deployed.
 
 ## How it works
 
@@ -112,7 +113,6 @@ automatically. Any other id is listed under its own name.
   address bar back.
 - **Modules cannot be switched on or added from the page yet.** The list comes from the shell's
   own settings; the settings area configures the modules in it.
-- **Only modules built on the shared core take settings from here:** ESXi today.
 - **Viewing has no sign-in**, here or in the modules. Only the settings area does.
 - **Sign-ins end when the shell restarts**, and the admin password travels in the clear unless
   the shell is served over HTTPS.

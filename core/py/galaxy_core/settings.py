@@ -27,7 +27,7 @@ TRUE = ("1", "true", "yes", "on")
 @dataclass(frozen=True)
 class Field:
     name: str                      # attribute name on the loaded settings, e.g. "refresh_seconds"
-    kind: str = "str"              # str | int | bool | list | path | text (several lines)
+    kind: str = "str"              # str | int | bool | list | path | text (several lines) | json (an object, as text)
     default: object = ""
     label: str = ""                # what a person sees on the module page
     help: str = ""
@@ -56,7 +56,7 @@ class Field:
             return max(self.minimum, value) if self.minimum is not None else value
         if self.kind == "list":
             return list(raw) if isinstance(raw, (list, tuple)) else [x.strip() for x in str(raw).split(",") if x.strip()]
-        value = str(raw).replace("\r\n", "\n").strip() if self.kind == "text" else str(raw).strip()
+        value = str(raw).replace("\r\n", "\n").strip() if self.kind in ("text", "json") else str(raw).strip()
         if self.choices and value not in self.choices:
             return self.default
         return value
@@ -114,18 +114,42 @@ class Store:
     """Settings saved from a page, layered over the environment.
 
     `path` is a JSON file (mode 0600); without one, saved values live in memory and are lost on
-    restart, which is fine for trying things out and is reported as `persistent: False`.
+    restart, which is fine for trying things out and is reported as `persistent: False`. A module
+    that applies settings by restarting itself hands them to its next run through the environment
+    variable named by `carry`, so they survive that restart even without a file.
     """
 
-    def __init__(self, fields: list[Field], prefix: str, path: str = "", environ=None):
-        self.fields, self.prefix, self.path = fields, prefix, path
+    def __init__(self, fields: list[Field], prefix: str, path: str = "", environ=None, carry: str = ""):
+        self.fields, self.prefix, self.path, self.carry = fields, prefix, path, carry
         self.environ = os.environ if environ is None else environ
         self.by_name = {f.name: f for f in fields}
         self._lock = threading.Lock()
         self.saved: dict = {}
+        data: dict = {}
         if path:
             data = load_json(path)
+        elif carry and self.environ.get(carry):
+            try:
+                data = json.loads(self.environ[carry])
+            except ValueError:
+                data = {}
+        if isinstance(data, dict):
             self.saved = {k: v for k, v in data.items() if k in self.by_name and self.by_name[k].editable}
+
+    def as_environment(self) -> dict[str, str]:
+        """Saved values as the environment variables a module reads, for modules that parse the
+        environment themselves. A forgotten secret is an empty variable, which hides the deployment's."""
+        out = {}
+        for name, value in self.saved.items():
+            f = self.by_name[name]
+            if isinstance(value, bool):
+                text = "true" if value else "false"
+            elif isinstance(value, (list, tuple)):
+                text = ",".join(str(x) for x in value)
+            else:
+                text = "" if value is None else str(value)
+            out[f.env(self.prefix)] = text
+        return out
 
     def effective(self):
         with self._lock:
@@ -164,6 +188,13 @@ class Store:
                     raise SettingsError(f"{f.label or name} must be a whole number") from None
             if f.choices and str(raw).strip() not in f.choices:
                 raise SettingsError(f"{f.label or name} must be one of: {', '.join(f.choices)}")
+            if f.kind == "json" and str(raw).strip():
+                try:
+                    parsed = json.loads(raw)
+                except (TypeError, ValueError) as err:
+                    raise SettingsError(f"{f.label or name} is not valid JSON: {err}") from None
+                if not isinstance(parsed, dict):
+                    raise SettingsError(f"{f.label or name} must be a JSON object: {{ ... }}")
             value = f.parse(raw)
             if value != getattr(current, name) or name in self.saved:
                 new[name] = value
