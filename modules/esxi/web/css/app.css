@@ -202,7 +202,8 @@ button { cursor: pointer; }
   background: rgba(255, 77, 109, 0.14); border: 1px solid rgba(255, 77, 109, 0.4); color: #ffc2cd; font-size: 12.5px; }
 
 /* ---------- embed / responsive ---------- */
-body.embed #topbar .brand .title, body.embed #topbar .brand #netName { display: none; }
+/* Inside the suite's frame the bar above already carries the brand and the name. */
+body.embed #topbar .brand .title, body.embed #topbar .brand #netName, body.embed #topbar .brand svg { display: none; }
 body.embed #topbar { top: 8px; left: 8px; right: 8px; height: 46px; }
 body.embed #rail, body.embed #drawer { top: 64px; }
 body.rail-hidden #rail { display: none; } body.rail-hidden #legend { left: 12px; }

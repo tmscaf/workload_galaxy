@@ -20,6 +20,14 @@ of them on a laptop with no cluster and no router ([Try it](#try-it)).
 Each module is a separate service with its own image, version and deployment. They share
 a design, a graph format and an API shape, described under [How it fits together](#how-it-fits-together).
 
+## One bar for all of them
+
+The [shell](shell) puts the modules behind one address. Its bar carries the suite's name and a
+drop-down that switches module; each entry shows what that module is watching and how many
+things there need attention, so trouble in one is visible while you are looking at another.
+
+![The suite bar with the module selector open](docs/screenshots/suite-bar.png)
+
 ## Kubernetes module
 
 Start in **Triage** when something is broken. It lists every problem with its likely
@@ -140,6 +148,17 @@ PYTHONPATH=../../../core/py ESXIGALAXY_MODE=sample ../.venv/bin/uvicorn esxigala
 # open http://127.0.0.1:8097/
 ```
 
+**The shell**, once any of the modules above are running (use the ports you started them on):
+
+```bash
+cd shell
+python3 -m venv .venv && .venv/bin/pip install -r app/requirements.txt
+cd app
+PYTHONPATH=../../core/py GALAXY_MODULES="kubernetes=http://127.0.0.1:8099,network=http://127.0.0.1:8098,esxi=http://127.0.0.1:8097" \
+  ../.venv/bin/uvicorn galaxyshell.main:app --port 8089
+# open http://127.0.0.1:8089/
+```
+
 ## How it fits together
 
 Every module has the same three parts:
@@ -170,6 +189,7 @@ modules/
   kubernetes/   collector, node agent, web UI, deploy (k8s, homelab, openshift), tests
   network/      collector, web UI, deploy (k8s, homelab, router sync script), tests
   esxi/         collector, web UI, deploy (k8s, homelab), tests
+shell/            the suite bar and module selector: app, web UI, deploy (k8s, homelab), tests
 docs/
   screenshots/
 ```
@@ -191,9 +211,9 @@ Planned, not yet built:
 2. **A shared front end.** Each module carries its own copy of the 3D engine and panels; the
    common parts should move to `core/web`, with each module supplying its node kinds, tables
    and panels.
-3. **A module page.** One landing page for the suite where built-in modules are switched on
-   and configured through a form drawn from their manifests, and modules running elsewhere
-   (the Kubernetes module inside a cluster) are added by URL.
+3. **A module page.** The shell lists the modules it is told about. Next: a page in it where
+   built-in modules are switched on and configured through a form drawn from their manifests,
+   and modules running elsewhere (the Kubernetes module inside a cluster) are added by URL.
 4. **Links between modules.** The same machine is a VM on the ESXi map, a device on the
    network map and a node on the Kubernetes map; selecting it in one should lead to the others.
 5. **More modules.** Any source that can be drawn as nodes and connections.
