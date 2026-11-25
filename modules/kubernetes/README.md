@@ -306,7 +306,7 @@ rail explains what each active scenario should show.
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r collector/requirements.txt
-cd collector && GALAXY_MODE=demo ../.venv/bin/uvicorn galaxy.main:app --port 8080
+cd collector && PYTHONPATH=../../../core/py GALAXY_MODE=demo ../.venv/bin/uvicorn galaxy.main:app --port 8080
 # open http://localhost:8080
 ```
 
@@ -357,7 +357,7 @@ API: `GET/PUT /api/v1/demo/scenarios` (`{"active": [...]}`); preset with
 ### Against any cluster from your machine (read-only, no agent)
 
 ```bash
-cd collector && KUBECONFIG=~/.kube/config ../.venv/bin/uvicorn galaxy.main:app --port 8080
+cd collector && PYTHONPATH=../../../core/py KUBECONFIG=~/.kube/config ../.venv/bin/uvicorn galaxy.main:app --port 8080
 ```
 
 Works with `oc login` tokens too. Without the agent you get declared + config
@@ -407,8 +407,19 @@ An open page notices a redeploy and offers a reload.
 
 ## Configuration
 
+Every setting is an environment variable. Most can also be changed from the suite's Settings
+page, which needs `GALAXY_SETTINGS_TOKEN` to hold the same token the suite shell has. What is
+saved there wins over the environment and takes effect when the collector restarts itself, a few
+seconds after saving. With `GALAXY_DATA_DIR` set (a small volume), saved settings outlive the
+pod; without it they last until the pod is replaced.
+
+Set where the collector is deployed only: the agent token, the Prometheus token and CA files,
+the data folder, the settings token.
+
 | Variable | Default | |
 |---|---|---|
+| `GALAXY_SETTINGS_TOKEN` | | shared with the suite shell, which presents it to read and change settings; empty = settings come from the environment only |
+| `GALAXY_DATA_DIR` | | where saved settings are kept so they outlive the pod; empty = until the pod is replaced |
 | `GALAXY_MODE` | `cluster` | `demo` for synthetic data |
 | `GALAXY_NAMESPACES` | *(all)* | restrict to these namespaces (also switches to per-namespace API calls — useful with project-scoped RBAC) |
 | `GALAXY_EXCLUDE_NAMESPACES` | | never show these |

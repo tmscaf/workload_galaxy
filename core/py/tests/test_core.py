@@ -153,3 +153,43 @@ def test_a_secret_is_forgotten_when_what_it_belongs_to_changes(tmp_path):
         with pytest.raises(SettingsError):
             st.update(bad)
     assert st.effective().host == "esx-c"                                                 # a refused change saves nothing
+
+
+# ---------------------------------------------------------------------------------------------- restart-to-apply
+def test_boot_lays_saved_settings_over_the_environment(tmp_path, monkeypatch):
+    import json
+    import os
+    from galaxy_core import settingsapi
+    fields = [Field("url"), Field("password", secret=True, bound_to=("url",)), Field("tags", kind="list"), Field("on", kind="bool", default=True),
+              Field("data_dir", kind="path", editable=False)]
+    (tmp_path / "settings.json").write_text(json.dumps({"url": "https://saved", "password": "", "tags": ["a", "b"], "on": False, "data_dir": "/x"}))
+    for k, v in {"Y_URL": "https://deployed", "Y_PASSWORD": "deployed-secret", "Y_DATA_DIR": str(tmp_path)}.items():
+        monkeypatch.setenv(k, v)
+    store, base = settingsapi.boot(fields, "Y")
+    # the module reads os.environ: saved values are there, a forgotten secret hides the deployment's, and what
+    # cannot be changed from a page (the data folder) is untouched
+    assert (os.environ["Y_URL"], os.environ["Y_PASSWORD"], os.environ["Y_TAGS"], os.environ["Y_ON"]) == ("https://saved", "", "a,b", "false")
+    assert os.environ["Y_DATA_DIR"] == str(tmp_path)
+    assert base["Y_URL"] == "https://deployed" and store.effective().url == "https://saved"       # the store still knows which is which
+    assert {f["name"]: f["source"] for f in store.describe()["fields"]}["url"] == "saved"
+
+
+def test_saving_restarts_with_the_deployments_environment_and_carries_settings_when_there_is_no_folder(monkeypatch):
+    import json
+    from galaxy_core import settingsapi
+    from galaxy_core.settings import Store
+    fields = [Field("mode", default="live", choices=("live", "sample")), Field("url", label="Address", required=True)]
+    base = {"Z_MODE": "live", "PATH": "/bin"}
+    seen = []
+    api = settingsapi.RestartingSettings(Store(fields, "Z", environ=base, carry="Z__SAVED_SETTINGS"), base,
+                                         tester=lambda c: {"ok": c.url == "https://good", "message": c.url},
+                                         restart=lambda env, before=None: seen.append(env))
+    assert api.describe()["missing"] == ["Address"] and api.describe()["appliesBy"] == "restart"
+    assert api.test({"url": "https://good"}) == {"ok": True, "message": "https://good"} and seen == []    # a test saves and restarts nothing
+    assert api.test({"mode": "sample"})["ok"] is True
+    assert api.apply({"url": "https://good"}) == {"forgot": [], "restarting": True}
+    env = seen[0]
+    assert env["Z_MODE"] == "live" and "Z_URL" not in env                       # the next run starts from the deployment's environment
+    assert json.loads(env["Z__SAVED_SETTINGS"]) == {"url": "https://good"}       # and is handed what was saved
+    again = Store(fields, "Z", environ=env, carry="Z__SAVED_SETTINGS")
+    assert again.effective().url == "https://good"

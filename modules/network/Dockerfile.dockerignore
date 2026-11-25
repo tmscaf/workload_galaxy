@@ -1,0 +1,9 @@
+# The build context is the repository root: send only what this image copies.
+*
+!core/py/galaxy_core
+!modules/network/VERSION
+!modules/network/collector
+!modules/network/web
+**/__pycache__
+**/*.pyc
+**/.DS_Store

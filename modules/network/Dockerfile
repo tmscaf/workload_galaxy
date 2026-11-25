@@ -1,13 +1,17 @@
 # Network Galaxy: API + UI in one image. Runs as non-root.
+#
+# Built from the repository root, because the module uses the shared core package:
+#   docker build -f modules/network/Dockerfile -t network-galaxy .
 FROM python:3.12-slim
 
 WORKDIR /app
-COPY collector/requirements.txt ./
+COPY modules/network/collector/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY VERSION ./VERSION
-COPY collector/netgalaxy ./netgalaxy
-COPY web ./web
+COPY modules/network/VERSION ./VERSION
+COPY core/py/galaxy_core ./galaxy_core
+COPY modules/network/collector/netgalaxy ./netgalaxy
+COPY modules/network/web ./web
 
 # Version/build stamp (scripts/deploy-homelab.sh passes these; defaults keep plain `docker build` working).
 ARG NETGALAXY_VERSION=dev

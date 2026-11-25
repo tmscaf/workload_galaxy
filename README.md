@@ -35,8 +35,9 @@ never shown back. Saved settings take effect at once, with no redeploy.
 
 ![The settings area with a module's form](docs/screenshots/suite-settings.png)
 
-ESXi is configured this way today. The Kubernetes and Network modules still take their settings
-where they are deployed.
+All three modules are configured this way. ESXi applies a change at once; Kubernetes and
+Network restart themselves with it, which takes a few seconds. Anything set where a module is
+deployed still works, and what is saved from Settings wins over it.
 
 ## Kubernetes module
 
@@ -143,7 +144,7 @@ cd modules/network
 python3 -m venv .venv && .venv/bin/pip install -r collector/requirements.txt
 cd collector
 NETGALAXY_MODE=sample NETGALAXY_SYSLOG_PORT=0 NETGALAXY_SINKHOLE_IPS=10.99.0.1 \
-  NETGALAXY_ROUTER_IP=10.20.0.1 NETGALAXY_LAN_CIDRS=10.20.0.0/24 \
+  NETGALAXY_ROUTER_IP=10.20.0.1 NETGALAXY_LAN_CIDRS=10.20.0.0/24 PYTHONPATH=../../../core/py \
   ../.venv/bin/uvicorn netgalaxy.main:app --port 8098
 # open http://127.0.0.1:8098/
 ```
@@ -185,10 +186,10 @@ in an iframe with `?embed=1` and exchanges selection and view changes over `post
 
 The shared part lives in `core/py/galaxy_core`: declaring a module's settings once, building
 nodes, edges and findings in the graph format, the refresh loop, and the API above. The ESXi
-module is built on it. The Kubernetes and Network modules came first and still carry their own
-copies of that code.
+module is built on it. The Kubernetes and Network modules came first: they use the core for
+their settings, and still carry their own copies of the rest.
 
-Each module built on the core also serves a manifest at `/api/v1/module` (what it is, what it
+Every module serves a manifest at `/api/v1/module` (what it is, what it
 needs, and the settings it takes) and a settings API the suite's Settings page reads and writes.
 A module accepts changes only from a caller that presents the settings token it shares with the
 shell.
@@ -238,8 +239,8 @@ use them. The deploy scripts run `sync` themselves.
 
 Planned, not yet built:
 
-1. **Move the Kubernetes and Network modules onto the core.** Their collectors still duplicate
-   what `galaxy_core` now provides.
+1. **Finish moving the Kubernetes and Network modules onto the core.** They share its settings
+   now; their collectors still duplicate its graph, tables and API code.
 2. **A shared front end.** Each module carries its own copy of the 3D engine and panels; the
    common parts should move to `core/web`, with each module supplying its node kinds, tables
    and panels.

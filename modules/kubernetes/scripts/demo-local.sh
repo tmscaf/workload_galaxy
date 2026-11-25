@@ -26,7 +26,8 @@ if [ "${PRESET}" = "enterprise" ]; then SCALE="enterprise-xl"; PRESET=""; fi
 
 VERSION="$(tr -d ' \n' < VERSION)"
 echo "==> building workload-galaxy:demo (${VERSION})"
-docker build -q -t workload-galaxy:demo --build-arg GALAXY_VERSION="${VERSION}" --build-arg GALAXY_BUILD="demo" . >/dev/null
+# The build context is the repository root: the image needs core/py as well as this module.
+docker build -q -t workload-galaxy:demo -f Dockerfile --build-arg GALAXY_VERSION="${VERSION}" --build-arg GALAXY_BUILD="demo" ../.. >/dev/null
 
 docker rm -f "${NAME}" >/dev/null 2>&1 || true
 docker run -d --name "${NAME}" --restart unless-stopped -p "127.0.0.1:${PORT}:8080" \

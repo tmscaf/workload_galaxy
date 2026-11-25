@@ -142,7 +142,7 @@ sysctl `net.ipv4.ping_group_range` (it is in `deploy/k8s`); no capability or roo
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r collector/requirements.txt pytest
 cd collector
-NETGALAXY_MODE=sample NETGALAXY_SYSLOG_PORT=0 NETGALAXY_SINKHOLE_IPS=10.99.0.1 \
+PYTHONPATH=../../../core/py NETGALAXY_MODE=sample NETGALAXY_SYSLOG_PORT=0 NETGALAXY_SINKHOLE_IPS=10.99.0.1 \
   NETGALAXY_ROUTER_IP=10.20.0.1 NETGALAXY_LAN_CIDRS=10.20.0.0/24 \
   ../.venv/bin/uvicorn netgalaxy.main:app --port 8098
 # open http://127.0.0.1:8098/
@@ -195,6 +195,16 @@ restarts.
 
 ## Configuration
 
+Every setting is an environment variable. Most can also be changed from the suite's Settings
+page, which needs `NETGALAXY_SETTINGS_TOKEN` to hold the same token the suite shell has. What is
+saved there is kept in the data folder (`settings.json`, readable only by the app), wins over
+the environment, and takes effect when the app restarts itself, a few seconds after saving. The
+port forwards, device names and hosts of [the site file](#the-site-file) can be pasted into
+Settings as JSON instead of being kept in a file.
+
+Set where the app is deployed only: the syslog port, the site file path, the data folder, the
+settings token.
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `NETGALAXY_MODE` | `live` | `live`, or `sample` for the built-in sample network |
@@ -214,7 +224,9 @@ restarts.
 | `NETGALAXY_OFFLINE_HOURS` | `24` | How long a device that left stays on the map, dimmed |
 | `NETGALAXY_EXTERNAL_LIMIT` | `70` | Internet services drawn one by one; the rest are folded into one node |
 | `NETGALAXY_CONFIG_FILE` | | Path of the site file |
-| `NETGALAXY_DATA_DIR` | | Where the device inventory is kept; empty = memory only |
+| `NETGALAXY_DATA_DIR` | | Where the device inventory and saved settings are kept; empty = memory only |
+| `NETGALAXY_SETTINGS_TOKEN` | | Shared with the suite shell, which presents it to read and change settings. Empty: settings come from the environment only |
+| `NETGALAXY_SITE` | | The site file's content as JSON, for when it is not kept in a file (this is what Settings saves) |
 | `NETGALAXY_VPN_CIDRS` | | Tunnel networks handed to VPN clients (e.g. `10.8.0.0/24`): drawn as VPN sessions |
 | `NETGALAXY_UNIFI_URL` / `_USER` / `_PASSWORD` | | UniFi controller address (e.g. `https://192.168.1.5:8443`) and a View Only login; empty = no Wi-Fi data |
 | `NETGALAXY_UNIFI_SITE` | `default` | The controller's site id |

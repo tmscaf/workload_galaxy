@@ -58,6 +58,9 @@ spec:
               valueFrom: {secretKeyRef: {name: network-galaxy-unifi, key: user, optional: true}}
             - name: NETGALAXY_UNIFI_PASSWORD
               valueFrom: {secretKeyRef: {name: network-galaxy-unifi, key: password, optional: true}}
+            # Shared with the suite shell: lets its Settings page change this module's settings. Optional.
+            - name: NETGALAXY_SETTINGS_TOKEN
+              valueFrom: {secretKeyRef: {name: network-galaxy-settings, key: token, optional: true}}
             - {name: NETGALAXY_CONFIG_FILE, value: /config/site.json}
             - {name: NETGALAXY_DATA_DIR, value: /data}
           volumeMounts:
