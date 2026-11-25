@@ -1,0 +1,38 @@
+name: Tests
+
+# Every push and pull request runs each part's own test suite, on the Python version the images use.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: core, requirements: shell/app/requirements.txt, tests: core/py/tests}
+          - {name: kubernetes, requirements: modules/kubernetes/collector/requirements.txt, tests: modules/kubernetes/tests}
+          - {name: network, requirements: modules/network/collector/requirements.txt, tests: modules/network/tests}
+          - {name: esxi, requirements: modules/esxi/collector/requirements.txt, tests: modules/esxi/tests}
+          - {name: shell, requirements: shell/app/requirements.txt, tests: shell/tests}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: ${{ matrix.requirements }}
+      - name: Install
+        run: pip install -r ${{ matrix.requirements }} pytest httpx
+      - name: Test
+        run: python -m pytest -q ${{ matrix.tests }}

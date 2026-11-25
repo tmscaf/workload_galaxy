@@ -1,5 +1,8 @@
 # Workload Galaxy
 
+[![Tests](https://github.com/tmscaf/workload_galaxy/actions/workflows/tests.yml/badge.svg)](https://github.com/tmscaf/workload_galaxy/actions/workflows/tests.yml)
+[![Licence: AGPL v3](https://img.shields.io/badge/licence-AGPL--3.0-blue.svg)](LICENSE)
+
 A suite of live, explorable maps of the systems you run. Each module watches one kind of
 system, draws it as an animated 3D galaxy, and tells you in plain words what is wrong,
 why, and what to do about it.
@@ -250,3 +253,20 @@ Planned, not yet built:
 4. **Links between modules.** The same machine is a VM on the ESXi map, a device on the
    network map and a node on the Kubernetes map; selecting it in one should lead to the others.
 5. **More modules.** Any source that can be drawn as nodes and connections.
+
+## Contributing and security
+
+[CONTRIBUTING.md](CONTRIBUTING.md) says how to run each part, what a change needs, and the terms
+contributions come in under. Security problems are reported privately: see
+[SECURITY.md](SECURITY.md), which also sets out what the suite does and does not protect.
+
+## Licence
+
+Copyright (C) 2026 tmscaf.
+
+Workload Galaxy is free software: you can redistribute it and modify it under the terms of the
+[GNU Affero General Public License, version 3](LICENSE). It comes with no warranty. If you run a
+modified version as a service for others, the licence asks you to offer them its source.
+
+Three.js, which the modules' front ends include, is under the MIT licence
+(`web/vendor/THREE-LICENSE` in each module).

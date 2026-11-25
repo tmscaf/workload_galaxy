@@ -1,0 +1,25 @@
+name: An idea
+description: Something a module should show, check for, or let you do.
+labels: [enhancement]
+body:
+  - type: dropdown
+    id: part
+    attributes:
+      label: Which part
+      options: [Kubernetes module, Network module, ESXi module, Suite bar or Settings, Shared core, Something else]
+    validations: {required: true}
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you were trying to find out or do
+      description: The situation, not the solution. "A VM was slow and I could not tell whether it was the host" is more useful than "add a graph".
+    validations: {required: true}
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would have helped
+  - type: textarea
+    id: data
+    attributes:
+      label: Where the information would come from
+      description: If you know which API, log or counter holds it, say so.

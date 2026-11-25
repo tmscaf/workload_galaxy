@@ -1,0 +1,24 @@
+# Changelog
+
+The suite as a whole. Each part keeps its own, with the detail:
+[Kubernetes](modules/kubernetes/CHANGELOG.md) · [Network](modules/network/CHANGELOG.md) ·
+[ESXi](modules/esxi/CHANGELOG.md).
+
+## 0.1.0
+
+The first release of Workload Galaxy as a suite: Kubernetes module 0.12.0, Network module 0.3.0,
+ESXi module 0.2.0, suite bar 0.2.1.
+
+- **Three modules in one repository**, each its own service: Kubernetes and OpenShift, a home or
+  small-office network behind a pfSense router, and a VMware ESXi host.
+- **One bar for all of them.** The suite bar lists the modules in a drop-down with how many
+  things need attention in each, and shows the one you pick underneath.
+- **Settings.** Every module can be told what to read from one page behind one sign-in: forms
+  are drawn from the settings each module declares, values can be tested before they are saved,
+  and passwords are never shown back.
+- **A shared core** for settings, the graph format, the tables and the API. The ESXi module is
+  built on it; the Kubernetes and Network modules use it for their settings.
+- **Secrets in one private file on the cluster**, turned into Kubernetes Secrets by
+  `tools/cluster-secrets.sh`, so none are passed on a command line or kept in the repository.
+- **Automated tests** for all five parts on every push.
+- **Licensed under AGPL-3.0.**
