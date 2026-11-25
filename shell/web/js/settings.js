@@ -1,4 +1,4 @@
-// The settings area: where each module gets its data from.
+// The settings area: which modules are on, and where each one gets its data from.
 //
 // One sign-in for the suite. Each module's form is drawn from what the module itself says it takes
 // (its fields, labels and help), so a new module needs no page of its own. Passwords are write-only:
@@ -20,13 +20,18 @@ const SOURCE = { saved: ['saved here', 'saved'], environment: ['set where the mo
 export class SettingsView {
   constructor(el, ctx) {
     this.el = el;
-    this.ctx = ctx;               // { modules(): [...], onModule(id), onChanged() }
+    this.ctx = ctx;               // { modules(): [...], persistent(), onModule(id), onChanged(), onSwitched() }
     this.session = null;
     this.module = null;           // id of the module whose form is open
     this.form = null;             // what the module said about its settings
     this.message = null;          // { cls, text } under the buttons
     this.busy = '';
+    this.switching = null;        // id of the module being turned on or off
+    this.switchError = null;      // { id, text } when that did not work
     el.addEventListener('click', (ev) => this._click(ev));
+    el.addEventListener('keydown', (ev) => {       // the module rows are not buttons: give them the keyboard too
+      if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.matches('li[data-module]')) { ev.preventDefault(); ev.target.click(); }
+    });
     el.addEventListener('submit', (ev) => { ev.preventDefault(); this._submit(ev.target); });
   }
 
@@ -60,14 +65,57 @@ export class SettingsView {
   render() {
     const mods = this.ctx.modules();
     const s = this.session;
-    const nav = mods.map((m) => `<li data-module="${esc(m.id)}" aria-current="${m.id === this.module}" tabindex="0">
-        <span class="dot ${m.ok === false ? 'down' : m.ok == null ? 'off' : m.level || 'ok'}"></span><span class="t">${esc(m.title)}</span>
-        <span class="s">${esc(m.ok === false ? 'not reachable' : m.name || m.summary || '')}</span></li>`).join('');
     this.el.innerHTML = `<div class="st-wrap">
-      <div class="st-head"><h1>Settings</h1><p>Where each module gets its data from. Changes are saved by the module and used straight away.</p>
+      <div class="st-head"><h1>Settings</h1><p>Which modules are on, and where each one gets its data from. Changes are used straight away.</p>
         ${s?.signedIn ? '<button class="link" data-signout>Sign out</button>' : ''}</div>
-      <ul class="st-nav" aria-label="Modules">${nav || '<li class="s">No modules are set up.</li>'}</ul>
-      <div class="st-panel">${this._panel(mods.find((m) => m.id === this.module))}</div></div>`;
+      <div class="st-side">${this._side(mods)}</div>
+      <div class="st-main"><div class="st-banner">${this._banner(mods)}</div>
+        <div class="st-panel">${this._panel(mods.find((m) => m.id === this.module))}</div></div></div>`;
+  }
+
+  // Called when the list of modules has been read again. A form someone may be typing in is left
+  // alone: only the list beside it, and the line above it, are redrawn.
+  refresh() {
+    const side = this.el.querySelector('.st-side'), banner = this.el.querySelector('.st-banner');
+    if (!side || !banner || !this.el.querySelector('form')) { this.render(); return; }
+    const focused = document.activeElement?.closest?.('.st-side [data-switch], .st-side li[data-module]');
+    const again = focused && (focused.dataset.switch ? `[data-switch="${focused.dataset.switch}"]` : `li[data-module="${focused.dataset.module}"]`);
+    const mods = this.ctx.modules();
+    side.innerHTML = this._side(mods);
+    banner.innerHTML = this._banner(mods);
+    if (again) side.querySelector(again)?.focus();
+  }
+
+  // The list of modules. Signed in, each has a switch that turns it on or off in the suite.
+  _side(mods) {
+    const signedIn = !!this.session?.signedIn;
+    const row = (m) => {
+      const on = m.enabled !== false;
+      const dot = !on ? 'off' : m.ok === false ? 'down' : m.ok == null ? 'off' : m.level || 'ok';
+      const text = !on ? 'Turned off' : m.ok === false ? 'not reachable' : m.name || m.summary || '';
+      const toggle = signedIn
+        ? `<button type="button" class="switch" role="switch" aria-checked="${on}" data-switch="${esc(m.id)}" ${this.switching ? 'disabled' : ''}
+            aria-label="${esc(m.title)} module" title="${on ? `Turn ${esc(m.title)} off` : `Turn ${esc(m.title)} on`}"></button>`
+        : '';
+      return `<li data-module="${esc(m.id)}" class="${on ? '' : 'is-off'}" aria-current="${m.id === this.module}" tabindex="0">
+        <span class="dot ${dot}"></span><span class="t">${esc(m.title)}</span>${toggle}<span class="s">${esc(text)}</span></li>`;
+    };
+    const note = !mods.length || !signedIn ? ''
+      : `<p class="st-note">A module that is off is left out of the module list and is not checked. It keeps running where it is deployed.${
+        this.ctx.persistent() ? '' : ' The shell has no data folder, so these switches go back to how it was deployed when it restarts.'}</p>`;
+    return `<ul class="st-nav" aria-label="Modules">${mods.map(row).join('') || '<li class="s">No modules are set up.</li>'}</ul>${note}`;
+  }
+
+  // One line above the panel: the module being looked at is off, or its switch did not work.
+  _banner(mods) {
+    const mod = mods.find((m) => m.id === this.module);
+    const out = [];
+    if (this.switchError) out.push(`<p class="st-msg bad" role="alert">${esc(this.switchError.text)}</p>`);
+    if (mod && mod.enabled === false && this.session?.signedIn) {
+      out.push(`<p class="st-msg warn"><b>${esc(mod.title)} is turned off.</b> It is not in the module list. Its settings can still be changed here.
+        <button type="button" class="st-btn" data-switch="${esc(mod.id)}" aria-checked="false" ${this.switching ? 'disabled' : ''}>Turn on</button></p>`);
+    }
+    return out.join('');
   }
 
   _panel(mod) {
@@ -164,12 +212,36 @@ export class SettingsView {
 
   // ------------------------------------------------------------------ actions
   _click(ev) {
-    const t = ev.target.closest('[data-module],[data-signout],[data-reload],[data-test]');
+    const t = ev.target.closest('[data-switch],[data-module],[data-signout],[data-reload],[data-test]');
     if (!t) return;
-    if (t.dataset.module) { this.message = null; this.module = t.dataset.module; this.ctx.onModule(this.module); if (this.session?.signedIn) this._load(); else this.render(); return; }
+    if (t.dataset.switch) { this._switch(t.dataset.switch, t.getAttribute('aria-checked') !== 'true'); return; }
+    if (t.dataset.module) { this.switchError = null; this.message = null; this.module = t.dataset.module; this.ctx.onModule(this.module); if (this.session?.signedIn) this._load(); else this.render(); return; }
     if (t.dataset.signout != null) { api('api/v1/logout', 'POST', {}).catch(() => {}).then(() => { this.message = null; this.open(this.module); }); return; }
     if (t.dataset.reload != null) { this._load(); return; }
     if (t.dataset.test != null) this._send(t.closest('form'), 'test');
+  }
+
+  // Turn a module on or off in the suite. The switch moves once the shell has taken the change, and
+  // the bar's module list follows.
+  async _switch(id, on) {
+    if (this.switching) return;
+    const mod = this.ctx.modules().find((m) => m.id === id);
+    if (!mod) return;
+    this.switching = id;
+    this.switchError = null;
+    this.refresh();
+    try {
+      await api(`api/v1/modules/${encodeURIComponent(id)}`, 'PUT', { enabled: on });
+      mod.enabled = on;
+      if (on) mod.ok = null;                // "checking…" until it reports in
+    } catch (err) {
+      if (err.status === 401) { this.session = { ...this.session, signedIn: false }; this.message = { cls: 'bad', text: 'Your sign-in ran out. Sign in again.' }; }
+      else this.switchError = { id, text: `${mod.title} could not be turned ${on ? 'on' : 'off'}: ${err.message}` };
+    }
+    this.switching = null;
+    if (this.session?.signedIn) this.refresh(); else this.render();
+    this.el.querySelector(`.st-side [data-switch="${CSS.escape(id)}"]`)?.focus();
+    this.ctx.onSwitched();
   }
 
   async _submit(form) {

@@ -97,13 +97,30 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .st-head p { margin: 0; color: var(--muted); flex: 1; min-width: 260px; }
 .st-head .link { color: var(--muted); background: none; border: 0; padding: 4px 6px; border-radius: 6px; }
 .st-head .link:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
-.st-nav { list-style: none; margin: 0; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: rgba(9, 14, 28, 0.6);
-  position: sticky; top: 0; }
-.st-nav li { display: grid; grid-template-columns: 10px 1fr; gap: 2px 10px; align-items: center; padding: 9px 10px; border-radius: 8px; cursor: pointer; }
+.st-side { position: sticky; top: 0; display: grid; gap: 10px; }
+.st-side .st-note { margin: 0 4px; }
+.st-main { min-width: 0; }
+.st-banner .st-msg { margin: 0 0 12px; max-width: none; display: flex; align-items: center; gap: 6px 12px; flex-wrap: wrap; }
+.st-banner .st-btn { margin-left: auto; padding: 5px 12px; }
+.st-nav { list-style: none; margin: 0; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: rgba(9, 14, 28, 0.6); }
+.st-nav li { display: grid; grid-template-columns: 10px 1fr auto; gap: 2px 10px; align-items: center; padding: 9px 10px; border-radius: 8px; cursor: pointer; }
+.st-nav li:focus-visible { outline: 2px solid var(--cyan); outline-offset: -2px; }
+.st-nav li.is-off .t { color: var(--muted); }
+/* The on/off switch beside each module. */
+.switch { position: relative; width: 34px; height: 20px; padding: 0; border-radius: 10px; flex: none;
+  border: 1px solid var(--line-strong); background: rgba(255, 255, 255, 0.06); }
+.switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--muted); transition: transform 0.12s ease, background-color 0.12s ease; }
+.switch[aria-checked="true"] { background: rgba(94, 230, 168, 0.2); border-color: rgba(94, 230, 168, 0.6); }
+.switch[aria-checked="true"]::after { transform: translateX(14px); background: var(--ok); }
+.switch:hover:not(:disabled) { border-color: rgba(160, 190, 255, 0.6); }
+.switch:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.switch:disabled { opacity: 0.55; cursor: default; }
+@media (prefers-reduced-motion: reduce) { .switch::after { transition: none; } }
 .st-nav li:hover { background: rgba(120, 160, 255, 0.1); }
 .st-nav li[aria-current="true"] { background: linear-gradient(135deg, rgba(79, 209, 255, 0.16), rgba(155, 123, 255, 0.16));
   box-shadow: inset 0 0 0 1px rgba(160, 190, 255, 0.22); }
-.st-nav .t { font-weight: 620; } .st-nav .s { grid-column: 2; color: var(--muted); font-size: 12px; }
+.st-nav .t { font-weight: 620; } .st-nav .s { grid-column: 2 / -1; color: var(--muted); font-size: 12px; }
 .st-panel { border: 1px solid var(--line); border-radius: 14px; background: rgba(9, 14, 28, 0.6); padding: 20px 22px 22px; min-height: 240px; }
 .st-panel h2 { margin: 0 0 3px; font-size: 17px; font-weight: 650; }
 .st-panel .lead { margin: 0 0 16px; color: var(--muted); }
@@ -140,8 +157,12 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 @media (max-width: 820px) {
   .st-wrap { grid-template-columns: 1fr; }
-  .st-nav { position: static; display: flex; flex-wrap: wrap; }
+  .st-side { position: static; }
+  .st-nav { display: flex; flex-wrap: wrap; }
   .st-field { grid-template-columns: 1fr; }
+}
+@media (max-width: 520px) {
+  .open { display: none; }
 }
 @media (max-width: 720px) {
   .brand .title, #modWhere, #modState { display: none; }

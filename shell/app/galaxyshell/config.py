@@ -14,6 +14,11 @@ FIELDS = [
     Field("modules_file", kind="path", label="Modules file", group="Modules", advanced=True,
           help="JSON instead of the list above, when a module needs a title or a separate address for the shell "
                "to check it on: {\"modules\": [{\"id\", \"title\", \"url\", \"probeUrl\"}]}."),
+    Field("modules_off", kind="list", label="Modules turned off", group="Modules",
+          help="Ids of modules that start turned off: listed in Settings, where they can be turned on, but not in "
+               "the selector. A choice made in Settings wins over this."),
+    Field("data_dir", kind="path", label="Data folder", group="Modules", advanced=True,
+          help="Where the choice of which modules are on is kept between restarts. Empty keeps it in memory."),
     Field("probe_seconds", kind="int", default=20, minimum=5, label="Check modules every (seconds)", group="Modules", advanced=True),
     Field("probe_verify_tls", kind="bool", default=False, label="Check module certificates", group="Modules", advanced=True),
     Field("admin_password", label="Admin password", group="Settings area", secret=True,

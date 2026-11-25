@@ -23,12 +23,16 @@ is remembered for the next visit. The selector works with the keyboard: arrow ke
 
 ## Settings
 
-The settings area is where each module is told what to read: its host, its account, how things
-are grouped. Each module's form is drawn from what the module itself says it takes, so a new
-module needs no page of its own.
+The settings area is where modules are turned on and off, and where each one is told what to
+read: its host, its account, how things are grouped. Each module's form is drawn from what the
+module itself says it takes, so a new module needs no page of its own.
 
 - **One sign-in.** The area is behind the shell's admin password. Viewing the modules needs none.
   Five wrong passwords from one address lock sign-in for five minutes.
+- **A switch beside each module** turns it on or off in the suite. A module that is off is left
+  out of the selector and the shell stops asking it how it is doing; it stays in Settings, where
+  it can be set up and turned back on. The module itself keeps running where it is deployed: the
+  shell starts and stops nothing.
 - **Test connection** tries what is typed without saving it.
 - **Save and apply** hands the settings to the module, which keeps them in its own data folder
   and starts using them: ESXi at once, Kubernetes and Network after restarting themselves, which
@@ -58,8 +62,9 @@ the one you pick in a frame through the module's embed mode (`?embed=1`), and as
 it is doing with two small reads of its public API (`/api/v1/meta` and `/api/v1/triage`), every
 20 seconds. The shell's server does the asking, because a page may not read another site's API.
 
-It keeps no state. Its only secrets are the two that turn the settings area on; a module's own
-credentials pass through it on the way to the module and are not kept.
+The one thing it keeps is which modules have been turned on or off, as a small file in its data
+folder. Its only secrets are the two that turn the settings area on; a module's own credentials
+pass through it on the way to the module and are not kept.
 
 ## Run it
 
@@ -82,7 +87,8 @@ docker build -f shell/Dockerfile -t workload-galaxy-shell .
 docker run --rm -p 8089:8080 --read-only -e GALAXY_MODULES="esxi=http://esxi-galaxy.example:8080" workload-galaxy-shell
 ```
 
-`deploy/k8s` is the Kubernetes base. The overlay for your cluster, which says where the modules
+`deploy/k8s` is the Kubernetes base: one Deployment, a Service and a small volume for the data
+folder. The overlay for your cluster, which says where the modules
 are, lives outside the repository; [docs/deploying.md](../docs/deploying.md) shows one and how
 `tools/deploy-k3s.sh shell` builds, ships and applies it. The admin password and the settings
 token come from the cluster's private secrets file (see [Secrets](../README.md#secrets)).
@@ -93,6 +99,8 @@ token come from the cluster's private secrets file (see [Secrets](../README.md#s
 |---|---|---|
 | `GALAXY_MODULES` | | Comma-separated `id=URL` pairs, in the order they should be listed. The URL is the one a browser uses |
 | `GALAXY_MODULES_FILE` | | A JSON file instead, when a module needs its own title or a separate address for the shell to check it on: `{"modules": [{"id", "title", "url", "probeUrl"}]}` |
+| `GALAXY_MODULES_OFF` | | Comma-separated ids of modules that start turned off. A switch flipped in Settings wins over this |
+| `GALAXY_DATA_DIR` | | Folder where the switches flipped in Settings are kept (`shell.json`). Empty: they last until the shell restarts |
 | `GALAXY_ADMIN_PASSWORD` | | Opens the settings area. Empty: the area is off |
 | `GALAXY_SETTINGS_TOKEN` | | Presented to modules to read and change their settings. Each module must be given the same value |
 | `GALAXY_PROBE_SECONDS` | 20 | How often each module is asked how it is doing |
@@ -112,8 +120,11 @@ automatically. Any other id is listed under its own name.
 - **What you are looking at inside a module is not in the address.** The address remembers which
   module, not which view or selection within it. "Open on its own" gives a module its full
   address bar back.
-- **Modules cannot be switched on or added from the page yet.** The list comes from the shell's
-  own settings; the settings area configures the modules in it.
+- **Turning a module off hides it; it does not stop it.** The module's own service keeps running
+  and keeps reading its source, and its own address still answers. To stop it, remove it where it
+  is deployed.
+- **Modules cannot be added from the page.** The list comes from `GALAXY_MODULES`; Settings turns
+  the modules in it on and off and configures them.
 - **Viewing has no sign-in**, here or in the modules. Only the settings area does.
 - **Sign-ins end when the shell restarts**, and the admin password travels in the clear unless
   the shell is served over HTTPS.

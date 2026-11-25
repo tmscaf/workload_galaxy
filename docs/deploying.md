@@ -79,6 +79,10 @@ which keeps it in the module's own data volume. If you would sooner set somethin
 any setting in a module's README can go in its ConfigMap in the overlay (`esxi-galaxy-config`,
 `network-galaxy-config`, `workload-galaxy-config`).
 
+To start with some modules turned off, list their ids in `GALAXY_MODULES_OFF` in the same ConfigMap
+(`GALAXY_MODULES_OFF=network,esxi`). They can be turned on from Settings, and the suite bar keeps
+that choice in its own small volume.
+
 For the Kubernetes module, add a small volume if settings saved from the page should outlive the
 pod: a PersistentVolumeClaim, mounted at `/data`, with `GALAXY_DATA_DIR=/data`.
 

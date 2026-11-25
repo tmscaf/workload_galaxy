@@ -1,6 +1,7 @@
 """The shell's HTTP app.
 
-    GET /api/v1/modules   the modules, in order, each with how it is doing
+    GET /api/v1/modules   the modules, in order, each with whether it is on and how it is doing
+    PUT /api/v1/modules/{id}                 turn a module on or off                  (needs a session)
     GET /api/v1/session, POST /api/v1/login, POST /api/v1/logout      the settings area's sign-in
     GET /api/v1/modules/{id}/settings        a module's settings as a form            (needs a session)
     PUT /api/v1/modules/{id}/settings        save them; the module starts using them  (needs a session)
@@ -27,21 +28,24 @@ from galaxy_core.auth import ACTION_HEADER, SESSION_SECONDS, Auth
 from . import __build__, __version__
 from .config import load_settings
 from .probe import Prober, call
+from .switches import Switches
 
 log = logging.getLogger("galaxyshell")
 
 
-def create_app(settings=None, prober: Prober | None = None, caller=call) -> FastAPI:
+def create_app(settings=None, prober: Prober | None = None, caller=call, switches: Switches | None = None) -> FastAPI:
     settings = settings or load_settings()
+    switches = switches or Switches(settings.modules_off, settings.data_dir)
     auth = Auth(settings.admin_password)
     by_id = {m["id"]: m for m in settings.module_list}
     logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     prober = prober or Prober(settings.module_list, settings.probe_seconds, settings.probe_verify_tls)
+    prober.enabled = switches.enabled
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         log.info("workload-galaxy shell %s (build %s) fronting %s", __version__, __build__,
-                 ", ".join(m["id"] for m in settings.module_list) or "no modules")
+                 ", ".join(m["id"] + ("" if switches.enabled(m["id"]) else " (off)") for m in settings.module_list) or "no modules")
         prober.start()
         yield
         prober.stop()
@@ -77,7 +81,7 @@ def create_app(settings=None, prober: Prober | None = None, caller=call) -> Fast
     @app.get("/api/v1/modules")
     def modules():
         return {"version": __version__, "build": __build__, "checkEverySeconds": settings.probe_seconds,
-                "modules": prober.snapshot()}
+                "persistent": switches.persistent, "modules": prober.snapshot()}
 
     # ------------------------------------------------------------------ the settings area
     # The browser signs in here, once. The shell then speaks to each module on its behalf, presenting
@@ -141,6 +145,29 @@ def create_app(settings=None, prober: Prober | None = None, caller=call) -> Fast
         resp = JSONResponse({"signedIn": False})
         resp.delete_cookie(auth.cookie, path="/")
         return resp
+
+    @app.put("/api/v1/modules/{mid}")
+    async def switch_module(mid: str, request: Request):
+        """Turn a module on or off in the suite. The module itself is not touched."""
+        action(request)
+        session(request)
+        m = module(mid)
+        try:
+            body = await request.json()
+        except ValueError:
+            raise HTTPException(400, detail="send JSON") from None
+        on = body.get("enabled") if isinstance(body, dict) else None
+        if not isinstance(on, bool):
+            raise HTTPException(400, detail='send {"enabled": true} or {"enabled": false}')
+        try:
+            switches.set(mid, on)
+        except OSError as err:
+            log.warning("could not save that %s is %s: %s", mid, "on" if on else "off", err)
+            raise HTTPException(500, detail=f"The choice could not be saved in the shell's data folder ({err.strerror or err}).") from None
+        log.info("%s turned %s from %s", mid, "on" if on else "off", client(request))
+        if on:
+            threading.Thread(target=prober.refresh, daemon=True).start()      # show its state without waiting
+        return {"id": mid, "title": m["title"], "enabled": on, "persistent": switches.persistent}
 
     @app.get("/api/v1/modules/{mid}/settings")
     def module_settings(mid: str, request: Request):

@@ -1,6 +1,17 @@
-# Workload Galaxy shell: one stateless pod. It reads each module's public API to show its state and
-# needs no Kubernetes API access and no volume. The Secret workload-galaxy-shell-settings (keys:
-# admin-password, settings-token) turns the Settings area on; without it the area stays off.
+# Workload Galaxy shell: one pod. It reads each module's public API to show its state and needs no
+# Kubernetes API access. The Secret workload-galaxy-shell-settings (keys: admin-password,
+# settings-token) turns the Settings area on; without it the area stays off.
+#
+# The small volume holds one file: which modules have been turned on or off from Settings.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: workload-galaxy-shell-data
+  labels: {app.kubernetes.io/name: workload-galaxy-shell}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 16Mi}}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -8,6 +19,7 @@ metadata:
   labels: {app.kubernetes.io/name: workload-galaxy-shell}
 spec:
   replicas: 1
+  strategy: {type: Recreate}
   selector: {matchLabels: {app.kubernetes.io/name: workload-galaxy-shell}}
   template:
     metadata:
@@ -18,6 +30,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 1001
         runAsGroup: 0
+        fsGroup: 0
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: shell
@@ -32,12 +45,18 @@ spec:
               valueFrom: {secretKeyRef: {name: workload-galaxy-shell-settings, key: admin-password, optional: true}}
             - name: GALAXY_SETTINGS_TOKEN
               valueFrom: {secretKeyRef: {name: workload-galaxy-shell-settings, key: settings-token, optional: true}}
+            - {name: GALAXY_DATA_DIR, value: /data}
+          volumeMounts:
+            - {name: data, mountPath: /data}
           resources:
             requests: {cpu: 10m, memory: 48Mi}
             limits: {memory: 128Mi}
           readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 10}
           livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 20, failureThreshold: 3}
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: workload-galaxy-shell-data}
 ---
 apiVersion: v1
 kind: Service
