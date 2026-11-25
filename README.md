@@ -15,9 +15,18 @@ of them on a laptop with no cluster and no router ([Try it](#try-it)).
 |---|---|---|---|
 | [Kubernetes](modules/kubernetes) | Kubernetes and OpenShift projects: workloads, pods, hosts, who calls whom, and where latency starts | 0.11.0 | [README](modules/kubernetes/README.md) · [changelog](modules/kubernetes/CHANGELOG.md) |
 | [Network](modules/network) | A home or small-office network behind a pfSense router: every device, what it talks to, what the firewall turns away, Wi-Fi and VPN | 0.2.0 | [README](modules/network/README.md) · [changelog](modules/network/CHANGELOG.md) |
+| [ESXi](modules/esxi) | A VMware ESXi host: virtual machines, the networks and datastores they hang off, capacity and right-sizing | 0.1.0 | [README](modules/esxi/README.md) · [changelog](modules/esxi/CHANGELOG.md) |
 
 Each module is a separate service with its own image, version and deployment. They share
 a design, a graph format and an API shape, described under [How it fits together](#how-it-fits-together).
+
+## One bar for all of them
+
+The [shell](shell) puts the modules behind one address. Its bar carries the suite's name and a
+drop-down that switches module; each entry shows what that module is watching and how many
+things there need attention, so trouble in one is visible while you are looking at another.
+
+![The suite bar with the module selector open](docs/screenshots/suite-bar.png)
 
 ## Kubernetes module
 
@@ -75,9 +84,36 @@ controller. Addresses can be blocked from the page behind a separate action pass
 viewing needs none. See the [module README](modules/network/README.md) for router setup,
 the site file and configuration.
 
+## ESXi module
+
+The host sits at the centre, its VMs orbit it by group and are sized by the memory they have
+been given, and what they hang off sits on the rim: datastores, port groups, and the physical
+network cards behind them. Powered-off VMs stay on the map, dimmed, because they still hold
+disk space.
+
+![The Galaxy view of an ESXi host](docs/screenshots/esxi-galaxy.png)
+
+**Triage** shows how full the host is and every finding with sized ways to fix it: which VMs
+could give memory back and how much that frees, which snapshots and powered-off VMs hold the
+most space on a full datastore.
+
+![ESXi triage: capacity, groups and findings](docs/screenshots/esxi-triage.png)
+
+Click a VM for what it is using now, the busiest it has been, its disks, adapters and
+snapshots. **Strata** stacks the same host as networks, VMs, each VM's running slot and disks,
+and the host and datastores underneath.
+
+![A VM selected, with its snapshot finding and usage](docs/screenshots/esxi-galaxy-detail.png)
+
+![Strata view of an ESXi host](docs/screenshots/esxi-strata.png)
+
+It reads the host through the vSphere API with a read-only account, changes nothing and
+installs nothing on it; the free ESXi licence is enough. See the
+[module README](modules/esxi/README.md) for the account setup, what it checks, and its limits.
+
 ## Try it
 
-Both modules run on made-up data with nothing to connect to.
+Every module runs on made-up data with nothing to connect to.
 
 **Kubernetes**, in Docker (a simulated OpenShift cluster with six deployments failing six ways):
 
@@ -102,6 +138,27 @@ NETGALAXY_MODE=sample NETGALAXY_SYSLOG_PORT=0 NETGALAXY_SINKHOLE_IPS=10.99.0.1 \
 # open http://127.0.0.1:8098/
 ```
 
+**ESXi**, the same way (a sample host with 15 VMs and one of each kind of finding):
+
+```bash
+cd modules/esxi
+python3 -m venv .venv && .venv/bin/pip install -r collector/requirements.txt
+cd collector
+PYTHONPATH=../../../core/py ESXIGALAXY_MODE=sample ../.venv/bin/uvicorn esxigalaxy.main:app --port 8097
+# open http://127.0.0.1:8097/
+```
+
+**The shell**, once any of the modules above are running (use the ports you started them on):
+
+```bash
+cd shell
+python3 -m venv .venv && .venv/bin/pip install -r app/requirements.txt
+cd app
+PYTHONPATH=../../core/py GALAXY_MODULES="kubernetes=http://127.0.0.1:8099,network=http://127.0.0.1:8098,esxi=http://127.0.0.1:8097" \
+  ../.venv/bin/uvicorn galaxyshell.main:app --port 8089
+# open http://127.0.0.1:8089/
+```
+
 ## How it fits together
 
 Every module has the same three parts:
@@ -116,10 +173,23 @@ They also share an API shape under `/api/v1/` (`meta`, `topology`, `node`, `work
 `calls`, `search`, `hotspots`, `triage`) and an embedding contract: any module's UI runs
 in an iframe with `?embed=1` and exchanges selection and view changes over `postMessage`.
 
+The shared part lives in `core/py/galaxy_core`: declaring a module's settings once, building
+nodes, edges and findings in the graph format, the refresh loop, and the API above. The ESXi
+module is built on it. The Kubernetes and Network modules came first and still carry their own
+copies of that code.
+
+Each module built on the core also serves a manifest at `/api/v1/module`: what it is, what it
+needs, and its settings with labels, help text and which ones are secrets. That is what a
+module page will draw its forms from.
+
 ```
+core/
+  py/galaxy_core/   settings, graph builders, scoping, tables, refresh loop, shared API; tests
 modules/
   kubernetes/   collector, node agent, web UI, deploy (k8s, homelab, openshift), tests
   network/      collector, web UI, deploy (k8s, homelab, router sync script), tests
+  esxi/         collector, web UI, deploy (k8s, homelab), tests
+shell/            the suite bar and module selector: app, web UI, deploy (k8s, homelab), tests
 docs/
   screenshots/
 ```
@@ -134,13 +204,16 @@ python3 -m venv .venv && .venv/bin/pip install -r collector/requirements.txt pyt
 
 ## Roadmap
 
-The modules began as one project and a copy of it, so today they duplicate the front end
-and parts of the collector. Planned, not yet built:
+Planned, not yet built:
 
-1. **Shared core.** Move the common collector code (app factory, state, paging and search)
-   and the common front end (scene, layout, triage, embed API) into `core/`, with each
-   module registering its own routes, table columns, node kinds and panels.
-2. **Suite shell.** One landing page that discovers running modules through `/api/v1/meta`
-   and embeds them, with links between modules (a pod's host to the same machine on the
-   network map).
-3. **More modules.** Any source that can be drawn as nodes and calls.
+1. **Move the Kubernetes and Network modules onto the core.** Their collectors still duplicate
+   what `galaxy_core` now provides.
+2. **A shared front end.** Each module carries its own copy of the 3D engine and panels; the
+   common parts should move to `core/web`, with each module supplying its node kinds, tables
+   and panels.
+3. **A module page.** The shell lists the modules it is told about. Next: a page in it where
+   built-in modules are switched on and configured through a form drawn from their manifests,
+   and modules running elsewhere (the Kubernetes module inside a cluster) are added by URL.
+4. **Links between modules.** The same machine is a VM on the ESXi map, a device on the
+   network map and a node on the Kubernetes map; selecting it in one should lead to the others.
+5. **More modules.** Any source that can be drawn as nodes and connections.

@@ -1,0 +1,6 @@
+# OS / editor / tooling
+.DS_Store
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

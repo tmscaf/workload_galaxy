@@ -1,0 +1,43 @@
+# Workload Galaxy shell: one stateless pod. It reads each module's public API to show its state and
+# needs no Kubernetes API access, no volume and no secret.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workload-galaxy-shell
+  labels: {app.kubernetes.io/name: workload-galaxy-shell}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: workload-galaxy-shell}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: workload-galaxy-shell}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 0
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: shell
+          image: workload-galaxy-shell
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8080}
+          envFrom:
+            - configMapRef: {name: workload-galaxy-shell-config}
+          resources:
+            requests: {cpu: 10m, memory: 48Mi}
+            limits: {memory: 128Mi}
+          readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 20, failureThreshold: 3}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workload-galaxy-shell
+  labels: {app.kubernetes.io/name: workload-galaxy-shell}
+spec:
+  selector: {app.kubernetes.io/name: workload-galaxy-shell}
+  ports: [{name: http, port: 80, targetPort: http}]

@@ -1,0 +1,73 @@
+# ESXi Galaxy: one pod. It reads an ESXi host (or vCenter) over HTTPS with a read-only account.
+# It needs no Kubernetes API access, no capabilities and nothing on the host itself.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: esxi-galaxy-data
+  labels: {app.kubernetes.io/name: esxi-galaxy}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 100Mi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: esxi-galaxy
+  labels: {app.kubernetes.io/name: esxi-galaxy}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app.kubernetes.io/name: esxi-galaxy}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: esxi-galaxy}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 0
+        fsGroup: 0
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: esxi-galaxy
+          image: esxi-galaxy
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8080}
+          envFrom:
+            - configMapRef: {name: esxi-galaxy-config}
+          env:
+            # The read-only account on the host. Create the Secret out of band (scripts/deploy-homelab.sh does).
+            - name: ESXIGALAXY_USER
+              valueFrom: {secretKeyRef: {name: esxi-galaxy-host, key: user}}
+            - name: ESXIGALAXY_PASSWORD
+              valueFrom: {secretKeyRef: {name: esxi-galaxy-host, key: password}}
+            - {name: ESXIGALAXY_SITE_FILE, value: /config/site.json}
+            - {name: ESXIGALAXY_DATA_DIR, value: /data}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: site, mountPath: /config, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+          resources:
+            requests: {cpu: 25m, memory: 96Mi}
+            limits: {memory: 256Mi}
+          readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 10, failureThreshold: 6}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 20, failureThreshold: 3}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: esxi-galaxy-data}
+        - name: site
+          configMap: {name: esxi-galaxy-site, optional: true}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: esxi-galaxy
+  labels: {app.kubernetes.io/name: esxi-galaxy}
+spec:
+  selector: {app.kubernetes.io/name: esxi-galaxy}
+  ports: [{name: http, port: 80, targetPort: http}]
