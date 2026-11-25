@@ -13,7 +13,7 @@ COPY core/py/galaxy_core ./galaxy_core
 COPY modules/network/collector/netgalaxy ./netgalaxy
 COPY modules/network/web ./web
 
-# Version/build stamp (scripts/deploy-homelab.sh passes these; defaults keep plain `docker build` working).
+# Version/build stamp (tools/deploy-k3s.sh passes these; defaults keep plain `docker build` working).
 ARG NETGALAXY_VERSION=dev
 ARG NETGALAXY_BUILD=local
 LABEL org.opencontainers.image.title="network-galaxy" \

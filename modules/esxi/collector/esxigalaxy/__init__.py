@@ -5,7 +5,7 @@ A module of the Workload Galaxy suite, built on galaxy_core. It reads the host t
 API with a read-only account and never changes anything.
 
 Version comes from the module's VERSION file, baked into the image as ESXIGALAXY_VERSION with
-ESXIGALAXY_BUILD (a UTC build stamp) by scripts/deploy-homelab.sh / the Dockerfile.
+ESXIGALAXY_BUILD (a UTC build stamp) by tools/deploy-k3s.sh / the Dockerfile.
 """
 import os
 

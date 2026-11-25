@@ -40,7 +40,7 @@ before it says anything, and nothing is called "new" during the first day.
 | Reachability checks | Whether a quiet server is still up | One TCP connection, opened and closed, to each port-forward target and each server named in the site file, every 2 minutes |
 | UniFi controller | Access points and switches, which access point each Wi-Fi device is on, signal, re-sent frames, channel use, joins and drops | Its API, read every 30 s with a View Only login |
 | Pings | Round-trip time and loss to the router, the ISP gateway, the internet, each access point and each Wi-Fi device; one DNS lookup through the router | ICMP echo from the app: every 5 s for the shared path, access points and watched devices, every 30 s for other Wi-Fi devices |
-| Site file (JSON) | What cannot be observed: port forwards, names for your servers, which machines are VMs on which host | `deploy/homelab/site.json`, mounted read-only |
+| Site file (JSON) | What cannot be observed: port forwards, names for your servers, which machines are VMs on which host | the suite's Settings page, or a JSON file mounted read-only |
 
 The app never connects to the router to change it. The one thing it can influence is the list of
 addresses you chose to block, which the router pulls (see Blocking).
@@ -132,7 +132,7 @@ Things to know:
 - Nothing is changed on the controller: the app signs in and reads. A **View Only** admin is enough
   (UniFi: Settings > Admins > add a local admin with the role View Only).
 
-Setup: `NETGALAXY_UNIFI_URL` plus the login (on the home lab: the Secret `network-galaxy-unifi`, keys
+Setup: `NETGALAXY_UNIFI_URL` plus the login (on Kubernetes: the Secret `network-galaxy-unifi`, keys
 `user` and `password`, written from `UNIFI_USER` and `UNIFI_PASSWORD` in the cluster's secrets file),
 and `NETGALAXY_ISP_GATEWAY` for the first hop beyond the router. On Kubernetes the pod needs the
 sysctl `net.ipv4.ping_group_range` (it is in `deploy/k8s`); no capability or root is needed.
@@ -162,18 +162,21 @@ Tests: `cd collector && ../.venv/bin/python -m pytest -q ../tests`.
    of its IP block rule (the number after `id:` in `pfctl -sr | grep pfB_`) in
    `NETGALAXY_BLOCKLIST_TRACKERS`, so known-bad hits are told apart from ordinary noise.
 
-## Deploy to the home lab
+## Deploy to Kubernetes
 
 ```bash
-scripts/deploy-homelab.sh
+tools/deploy-k3s.sh network        # from the repository root
 ```
 
-The script builds the image for amd64, ships it to the k3s node, creates the Rancher project and
-namespace `network-galaxy` on first use, writes the module's Secrets from the cluster's private
-secrets file (see [Secrets](../../README.md#secrets); nothing secret is passed to the script),
-and applies `deploy/homelab`. The UI is at `http://192.168.1.20:8091`;
-syslog is received on UDP 5514. The device inventory lives on a small volume so history survives
-restarts.
+For a k3s cluster without a registry: the tool builds the image for amd64, ships it to the node,
+creates the namespace `network-galaxy` on first use, writes the module's Secrets from the
+cluster's private secrets file (see [Secrets](../../README.md#secrets); nothing secret is passed
+to the tool), and applies your overlay. The overlay and the cluster it goes to are kept outside
+the repository; see [docs/deploying.md](../../docs/deploying.md).
+
+The base in `deploy/k8s` is one pod with a small volume, so the device inventory and saved
+settings survive restarts. Syslog is received on UDP 5514: expose that port to the router as
+well as the UI.
 
 ## The site file
 
@@ -264,6 +267,6 @@ collector/netgalaxy/   ntopng.py (client), syslog.py (receiver + parsers), devic
                        state.py (refresh loop), main.py (API), sample.py (sample network),
                        scale.py + graphops.py (shared with the Kubernetes module)
 web/                   the front end (Three.js, no build step)
-deploy/k8s, deploy/homelab, deploy/router (pfSense sync script), scripts/deploy-homelab.sh
+deploy/k8s (the kustomize base), deploy/router (pfSense sync script)
 tests/
 ```

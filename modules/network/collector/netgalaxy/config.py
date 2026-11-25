@@ -55,7 +55,7 @@ class Settings:
     offline_hours: int = 24                    # how long a device that left stays on the map, dimmed
     present_seconds: int = 900                 # seen this recently = present
     external_limit: int = 70                   # internet destinations drawn individually; the rest are grouped
-    config_file: str = ""                      # JSON: port forwards, device names, hosts (see deploy/homelab)
+    config_file: str = ""                      # JSON: port forwards, device names, hosts (see the README)
     # blocking (the router pulls the list; the app holds no router credentials)
     admin_password: str = ""                   # needed to block/unblock; empty = actions disabled
     blocklist_token: str = ""                  # the router's sync script presents this; empty = list not served

@@ -201,11 +201,12 @@ shell.
 core/
   py/galaxy_core/   settings, graph builders, scoping, tables, refresh loop, shared API; tests
 modules/
-  kubernetes/   collector, node agent, web UI, deploy (k8s, homelab, openshift), tests
-  network/      collector, web UI, deploy (k8s, homelab, router sync script), tests
-  esxi/         collector, web UI, deploy (k8s, homelab), tests
-shell/            the suite bar and module selector: app, web UI, deploy (k8s, homelab), tests
-tools/            cluster-secrets.sh: one private secrets file on the cluster -> Kubernetes Secrets
+  kubernetes/   collector, node agent, web UI, deploy (k8s base, openshift overlay), tests
+  network/      collector, web UI, deploy (k8s base, router sync script), tests
+  esxi/         collector, web UI, deploy (k8s base), tests
+shell/            the suite bar and module selector: app, web UI, deploy (k8s base), tests
+tools/            deploy-k3s.sh (build, ship and apply one part) and cluster-secrets.sh (one private
+                  secrets file on the cluster -> Kubernetes Secrets)
 docs/
   screenshots/
 ```
@@ -236,7 +237,15 @@ ssh <cluster> 'bash -s -- sync' < tools/cluster-secrets.sh   # file -> Kubernete
 invents itself (the Settings admin password, the settings token, the Kubernetes module's agent
 token) and leaves the rest empty to fill in. To change a secret, edit the file on the cluster
 and run `sync`: it rewrites only the Secrets that changed and restarts only the workloads that
-use them. The deploy scripts run `sync` themselves.
+use them. The deploy tool runs `sync` itself.
+
+## Deploying
+
+Each part has a kustomize base in its `deploy/k8s`. What is particular to your cluster (the
+namespace, how a part is exposed, where the modules are) goes in an overlay kept outside this
+repository, and [`tools/deploy-k3s.sh`](tools/deploy-k3s.sh) builds, ships and applies a part
+for a k3s cluster without a registry. [docs/deploying.md](docs/deploying.md) has the details and
+a complete example overlay.
 
 ## Roadmap
 

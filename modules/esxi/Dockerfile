@@ -13,7 +13,7 @@ COPY core/py/galaxy_core ./galaxy_core
 COPY modules/esxi/collector/esxigalaxy ./esxigalaxy
 COPY modules/esxi/web ./web
 
-# Version/build stamp (scripts/deploy-homelab.sh passes these; defaults keep plain `docker build` working).
+# Version/build stamp (tools/deploy-k3s.sh passes these; defaults keep plain `docker build` working).
 ARG ESXIGALAXY_VERSION=dev
 ARG ESXIGALAXY_BUILD=local
 LABEL org.opencontainers.image.title="esxi-galaxy" \

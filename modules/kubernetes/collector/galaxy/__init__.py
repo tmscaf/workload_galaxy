@@ -1,7 +1,7 @@
 """Workload Galaxy - topology, traffic and latency-risk explorer for Kubernetes / OpenShift projects.
 
 Version comes from one place: the repo's VERSION file, baked into the image as GALAXY_VERSION
-together with GALAXY_BUILD (a UTC build stamp) by scripts/deploy-homelab.sh / the Dockerfile.
+together with GALAXY_BUILD (a UTC build stamp) by tools/deploy-k3s.sh / the Dockerfile.
 """
 import os
 import pathlib

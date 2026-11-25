@@ -1,5 +1,5 @@
 # Base install. The ConfigMap workload-galaxy-shell-config (GALAXY_MODULES) comes from an overlay:
-# see ../homelab.
+# docs/deploying.md shows one.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:

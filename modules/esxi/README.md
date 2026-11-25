@@ -135,9 +135,10 @@ API. Nothing else is required. Optional, in the same namespace:
 - ConfigMap `esxi-galaxy-config` with `ESXIGALAXY_*` settings, and Secret `esxi-galaxy-host`
   with keys `user` and `password`, for deployments that set them here instead
 
-`deploy/homelab` is an overlay for one home lab, and `scripts/deploy-homelab.sh` builds, ships
-and applies it. The account and the settings token come from the cluster's private secrets file
-(see [Secrets](../../README.md#secrets)); nothing secret is passed to the script.
+The overlay for your cluster lives outside the repository; [docs/deploying.md](../../docs/deploying.md)
+shows one and how `tools/deploy-k3s.sh esxi` builds, ships and applies it. The account and the
+settings token come from the cluster's private secrets file (see
+[Secrets](../../README.md#secrets)); nothing secret is passed to the tool.
 
 ## The site file
 
@@ -223,7 +224,7 @@ collector/esxigalaxy/   vsphere.py (the reader), sample.py (sample host), graph.
                         findings.py (checks and sizing), history.py (peaks and changes),
                         state.py (refresh loop), config.py (settings and manifest), main.py (API)
 web/                    the front end (Three.js, no build step)
-deploy/k8s, deploy/homelab, scripts/deploy-homelab.sh
+deploy/k8s                the kustomize base
 tests/
 ```
 

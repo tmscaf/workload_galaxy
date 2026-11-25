@@ -5,7 +5,7 @@ A sibling of Workload Galaxy: it serves the same graph format to the same 3D fro
 pfSense router (ntopng for traffic, remote syslog for firewall and DHCP events).
 
 Version comes from the repo's VERSION file, baked into the image as NETGALAXY_VERSION with
-NETGALAXY_BUILD (a UTC build stamp) by scripts/deploy-homelab.sh / the Dockerfile.
+NETGALAXY_BUILD (a UTC build stamp) by tools/deploy-k3s.sh / the Dockerfile.
 """
 import os
 import pathlib

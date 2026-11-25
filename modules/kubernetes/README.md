@@ -15,7 +15,7 @@ runs in an iframe and talks `postMessage`.
 | `collector/` | Python service: reads the cluster API, merges telemetry, scores risk, serves API + UI |
 | `agent/` | Optional node agent (DaemonSet): live TCP/UDP flows, kernel RTT, retransmits, queue backpressure |
 | `web/` | The UI — Three.js (vendored, no CDN, works air-gapped), no build step |
-| `deploy/k8s` | Base manifests (kustomize) · `deploy/homelab` k3s/Rancher overlay · `deploy/openshift` OpenShift overlay |
+| `deploy/k8s` | Base manifests (kustomize) · `deploy/openshift` OpenShift overlay |
 
 ## What you see
 
@@ -363,16 +363,16 @@ cd collector && PYTHONPATH=../../../core/py KUBECONFIG=~/.kube/config ../.venv/b
 Works with `oc login` tokens too. Without the agent you get declared + config
 topology and pod health; live flows need the in-cluster agent.
 
-### Home-lab k3s + Rancher
+### k3s without a registry
 
 ```bash
-scripts/deploy-homelab.sh              # version from VERSION + a unique UTC build stamp
+tools/deploy-k3s.sh kubernetes         # from the repository root; version from VERSION + a unique UTC build stamp
 ```
 
-Builds an amd64 image, imports it on `node-1`, creates the **Workload Galaxy**
-Rancher project + `workload-galaxy` namespace, the agent token Secret, and
-applies `deploy/homelab`. UI: <http://192.168.1.20:8090> (or
-`galaxy.192.168.1.20.sslip.io` once a pfSense Host Override exists).
+Builds an amd64 image, imports it on the k3s node, creates the `workload-galaxy` namespace (and
+a Rancher project, if the cluster runs Rancher), writes the agent token Secret from the
+cluster's private secrets file, and applies your overlay. The overlay and the cluster it goes to
+are kept outside the repository; see [docs/deploying.md](../../docs/deploying.md).
 
 ### OpenShift
 
@@ -506,7 +506,7 @@ Node ids: `wl:<ns>/<Kind>/<name>`, `entry:<ns>/<Kind>/<name>`, `svc:<ns>/<name>`
   Kubernetes API access. Reports are authenticated with a shared token.
 - **The UI has no login of its own.** It reveals cluster topology. Keep it on
   trusted networks or put it behind the suite's gateway / an oauth-proxy before
-  exposing it more widely. The home-lab overlay exposes it on the LAN only.
+  exposing it more widely.
 
 ## Limits worth knowing
 

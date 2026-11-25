@@ -45,8 +45,7 @@
   disconnects and failed logins; scanners knocking on the VPN port) and a "VPN connections" group on
   the map with each session's traffic to home devices. Fed by the router's sync script (status every
   minute, `POST /api/v1/vpn-status`) and the forwarded VPN log. New setting `NETGALAXY_VPN_CIDRS`.
-- Friendly LAN name: `http://netgalaxy` / `http://netgalaxy.home.arpa` via a Traefik Ingress
-  (needs the pfSense DNS Resolver Host Override `netgalaxy.home.arpa -> 192.168.1.20`).
+- A friendly name on the LAN through an Ingress, where the router's DNS has a host override for it.
 - When ntopng stops answering (it can crash on a small router), the message now says so and
   where to start it again, instead of a bare `ConnectTimeout`.
 - Flow requests sort by `bytes` (ntopng adds the `column_` prefix itself; the old value made it log

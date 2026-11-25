@@ -82,8 +82,9 @@ docker build -f shell/Dockerfile -t workload-galaxy-shell .
 docker run --rm -p 8089:8080 --read-only -e GALAXY_MODULES="esxi=http://esxi-galaxy.example:8080" workload-galaxy-shell
 ```
 
-`deploy/k8s` is the Kubernetes base and `deploy/homelab` an overlay for one home lab;
-`scripts/deploy-homelab.sh` builds, ships and applies it. The admin password and the settings
+`deploy/k8s` is the Kubernetes base. The overlay for your cluster, which says where the modules
+are, lives outside the repository; [docs/deploying.md](../docs/deploying.md) shows one and how
+`tools/deploy-k3s.sh shell` builds, ships and applies it. The admin password and the settings
 token come from the cluster's private secrets file (see [Secrets](../README.md#secrets)).
 
 ## Configuration

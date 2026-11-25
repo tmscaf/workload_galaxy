@@ -14,8 +14,8 @@ image tag and the `app.kubernetes.io/version` label in Rancher.
 - **Changes need the settings token** (`GALAXY_SETTINGS_TOKEN`), which the suite shell presents.
   Without one the collector takes its settings from its environment only, as before, and does
   not reveal them. The agent token and file paths cannot be changed from the page.
-- **Saved settings need a data folder to outlive the pod** (`GALAXY_DATA_DIR`; the home-lab
-  overlay adds a small volume). Without one they last until the pod is replaced.
+- **Saved settings need a data folder to outlive the pod** (`GALAXY_DATA_DIR`, on a small
+  volume). Without one they last until the pod is replaced.
 - The collector now uses the suite's shared core for settings, so its image is built from the
   repository root (`docker build -f modules/kubernetes/Dockerfile .`).
 
@@ -225,7 +225,7 @@ image tag and the `app.kubernetes.io/version` label in Rancher.
   is inflated by delayed ACKs on quiet connections. Internet distance is no
   longer a fault.
 
-## 0.2.0 (first deploy to the home-lab cluster)
+## 0.2.0 (first deploy to a cluster)
 - Cascade view: call-depth waterfall with failure cascades and blast radius.
 - Node-level diagnosis: memory/CPU requests vs limits vs usage, overcommit,
   system-reserved, taints, an Unscheduled pseudo-host, per-pod issues, and
@@ -235,4 +235,4 @@ image tag and the `app.kubernetes.io/version` label in Rancher.
 
 ## 0.1.0
 - Collector (topology, config inference, risk, API), node agent, Galaxy and
-  Strata views, demo mode, k8s / home-lab / OpenShift manifests.
+  Strata views, demo mode, k8s / k3s / OpenShift manifests.

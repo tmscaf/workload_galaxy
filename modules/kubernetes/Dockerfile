@@ -21,7 +21,7 @@ COPY modules/kubernetes/collector/galaxy ./galaxy
 COPY modules/kubernetes/agent/agent.py ./agent.py
 COPY modules/kubernetes/web ./web
 
-# Version/build stamp (scripts/deploy-homelab.sh passes these; defaults keep plain `docker build` working).
+# Version/build stamp (tools/deploy-k3s.sh passes these; defaults keep plain `docker build` working).
 ARG GALAXY_VERSION=dev
 ARG GALAXY_BUILD=local
 LABEL org.opencontainers.image.title="workload-galaxy" \
