@@ -2,11 +2,35 @@
 //
 // The module in view is kept in the address (#esxi) so a link or a reload comes back to it, and
 // remembered for the next visit. Modules are shown through their embed mode (?embed=1).
+// #settings (or #settings/esxi) opens the settings area in place of the module.
+import { SettingsView } from './settings.js';
+
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-const state = { modules: [], selected: null, shown: null, every: 20, loaded: false };
-const button = $('modButton'), menu = $('modMenu'), frame = $('frame'), notice = $('notice');
+const state = { modules: [], selected: null, shown: null, every: 20, loaded: false, settings: false };
+const button = $('modButton'), menu = $('modMenu'), frame = $('frame'), notice = $('notice'), settingsEl = $('settings');
+const settingsView = new SettingsView(settingsEl, {
+  modules: () => state.modules,
+  onModule(id) { history.replaceState(null, '', `#settings/${id}`); },
+  onChanged() { setTimeout(load, 1500); },          // the module starts a fresh reading; show its new state soon
+});
+
+function showSettings(on, id) {
+  state.settings = on;
+  $('settingsButton').setAttribute('aria-pressed', String(on));
+  settingsEl.hidden = !on;
+  if (on) {
+    frame.hidden = true;
+    notice.hidden = true;
+    const target = id || state.selected;
+    history.replaceState(null, '', `#settings${target ? '/' + target : ''}`);
+    settingsView.open(target);
+  } else {
+    if (state.selected) history.replaceState(null, '', '#' + state.selected);
+    render();
+  }
+}
 
 const levelOf = (m) => (m.ok === false ? 'down' : m.ok == null ? 'off' : m.level || 'ok');
 
@@ -26,6 +50,7 @@ function embedUrl(m) {
 function pick(id, { remember = true } = {}) {
   if (!state.modules.some((m) => m.id === id)) return;
   state.selected = id;
+  if (remember && state.settings) { state.settings = false; $('settingsButton').setAttribute('aria-pressed', 'false'); settingsEl.hidden = true; }
   if (remember) {
     try { localStorage.setItem('wg.module', id); } catch { /* storage unavailable */ }
     if (location.hash.slice(1) !== id) history.replaceState(null, '', '#' + id);
@@ -35,7 +60,7 @@ function pick(id, { remember = true } = {}) {
 
 function initialChoice() {
   const ids = state.modules.map((m) => m.id);
-  const fromHash = location.hash.slice(1);
+  const fromHash = location.hash.slice(1).replace(/^settings\/?/, '');
   if (ids.includes(fromHash)) return fromHash;
   let last = null;
   try { last = localStorage.getItem('wg.module'); } catch { /* storage unavailable */ }
@@ -77,6 +102,7 @@ function render() {
 
   // The stage: the module's own page, or why there is nothing to show.
   if (!state.loaded) return;
+  if (state.settings) { frame.hidden = true; notice.hidden = true; return; }
   if (!state.modules.length) {
     showNotice('No modules are set up', 'Tell the shell where each module runs, as id=URL pairs in the order they should be listed:',
       'GALAXY_MODULES=kubernetes=http://host:8090,network=http://host:8091,esxi=http://host:8092');
@@ -114,6 +140,8 @@ async function load() {
       state.selected = initialChoice();
       if (state.selected) pick(state.selected, { remember: false });
     }
+    if (first && location.hash.startsWith('#settings')) showSettings(true, location.hash.split('/')[1]);
+    else if (state.settings && !settingsEl.querySelector('form')) settingsView.render();      // keep the list of modules fresh, never a form being typed in
     render();
   } catch (err) {
     if (!state.loaded) { state.loaded = true; showNotice('The shell is not answering', `Could not load the list of modules: ${err.message}.`, null, true); }
@@ -154,7 +182,13 @@ menu.addEventListener('keydown', (ev) => {
 document.addEventListener('click', (ev) => { if (!menu.hidden && !menu.contains(ev.target)) openMenu(false); });
 // A click inside the module's frame never reaches this page: close the menu when the frame takes focus.
 window.addEventListener('blur', () => { if (!menu.hidden) openMenu(false); });
-window.addEventListener('hashchange', () => { const id = location.hash.slice(1); if (id && id !== state.selected) pick(id); });
+window.addEventListener('hashchange', () => {
+  const h = location.hash.slice(1);
+  if (h.startsWith('settings')) { if (!state.settings) showSettings(true, h.split('/')[1]); return; }
+  if (state.settings) { showSettings(false); }
+  if (h && h !== state.selected) pick(h);
+});
+$('settingsButton').addEventListener('click', () => showSettings(!state.settings));
 
 load();
 (function poll() { setTimeout(async () => { await load(); poll(); }, Math.max(5, state.every) * 1000); })();

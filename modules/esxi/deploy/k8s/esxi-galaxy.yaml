@@ -1,5 +1,9 @@
 # ESXi Galaxy: one pod. It reads an ESXi host (or vCenter) over HTTPS with a read-only account.
 # It needs no Kubernetes API access, no capabilities and nothing on the host itself.
+#
+# Everything it is told is optional here. With nothing set it starts unconfigured and is given its
+# host from the suite's Settings page, which needs the Secret esxi-galaxy-settings (key: token) to
+# hold the same token the suite shell has.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -36,13 +40,16 @@ spec:
           ports:
             - {name: http, containerPort: 8080}
           envFrom:
-            - configMapRef: {name: esxi-galaxy-config}
+            - configMapRef: {name: esxi-galaxy-config, optional: true}
           env:
-            # The read-only account on the host. Create the Secret out of band (scripts/deploy-homelab.sh does).
+            # The read-only account on the host, for deployments that set it here instead of in Settings.
             - name: ESXIGALAXY_USER
-              valueFrom: {secretKeyRef: {name: esxi-galaxy-host, key: user}}
+              valueFrom: {secretKeyRef: {name: esxi-galaxy-host, key: user, optional: true}}
             - name: ESXIGALAXY_PASSWORD
-              valueFrom: {secretKeyRef: {name: esxi-galaxy-host, key: password}}
+              valueFrom: {secretKeyRef: {name: esxi-galaxy-host, key: password, optional: true}}
+            # Shared with the suite shell: lets its Settings page change this module's settings.
+            - name: ESXIGALAXY_SETTINGS_TOKEN
+              valueFrom: {secretKeyRef: {name: esxi-galaxy-settings, key: token, optional: true}}
             - {name: ESXIGALAXY_SITE_FILE, value: /config/site.json}
             - {name: ESXIGALAXY_DATA_DIR, value: /data}
           volumeMounts:

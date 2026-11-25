@@ -16,8 +16,39 @@ The suite's front door: one bar across the top, and the selected module undernea
 - **The rest of the bar** describes the module in view: what it is watching, its version,
   whether it is on sample data, and a link that opens it on its own.
 
+- **Settings**, at the right end, opens the settings area in place of the module.
+
 The module in view is kept in the address (`#esxi`), so a link or a reload comes back to it, and
 is remembered for the next visit. The selector works with the keyboard: arrow keys, Enter, Esc.
+
+## Settings
+
+The settings area is where each module is told what to read: its host, its account, how things
+are grouped. Each module's form is drawn from what the module itself says it takes, so a new
+module needs no page of its own.
+
+- **One sign-in.** The area is behind the shell's admin password. Viewing the modules needs none.
+  Five wrong passwords from one address lock sign-in for five minutes.
+- **Test connection** tries what is typed without saving it.
+- **Save and apply** hands the settings to the module, which keeps them in its own data folder
+  and starts using them at once. The shell stores none of it.
+- **Passwords are write-only.** The page is told whether one is set, never what it is.
+- **Each value says where it comes from:** saved here, set where the module is deployed, or
+  its default. Saved values win.
+
+It takes two secrets to turn on:
+
+| | On the shell | On each module |
+|---|---|---|
+| Admin password | `GALAXY_ADMIN_PASSWORD` | |
+| Settings token (the same value everywhere) | `GALAXY_SETTINGS_TOKEN` | its own, e.g. `ESXIGALAXY_SETTINGS_TOKEN` |
+
+The token is what a module trusts: it accepts settings only from a caller that presents it, and
+a browser never sees it. Without an admin password the area is off; without a token, settings
+cannot be read or changed from the suite and every module keeps what it was deployed with.
+
+A module that has no settings API yet (Kubernetes and Network today) is listed as configured
+where it is deployed.
 
 ## How it works
 
@@ -26,7 +57,8 @@ the one you pick in a frame through the module's embed mode (`?embed=1`), and as
 it is doing with two small reads of its public API (`/api/v1/meta` and `/api/v1/triage`), every
 20 seconds. The shell's server does the asking, because a page may not read another site's API.
 
-It keeps no state and holds no secrets.
+It keeps no state. Its only secrets are the two that turn the settings area on; a module's own
+credentials pass through it on the way to the module and are not kept.
 
 ## Run it
 
@@ -58,6 +90,8 @@ docker run --rm -p 8089:8080 --read-only -e GALAXY_MODULES="esxi=http://esxi-gal
 |---|---|---|
 | `GALAXY_MODULES` | | Comma-separated `id=URL` pairs, in the order they should be listed. The URL is the one a browser uses |
 | `GALAXY_MODULES_FILE` | | A JSON file instead, when a module needs its own title or a separate address for the shell to check it on: `{"modules": [{"id", "title", "url", "probeUrl"}]}` |
+| `GALAXY_ADMIN_PASSWORD` | | Opens the settings area. Empty: the area is off |
+| `GALAXY_SETTINGS_TOKEN` | | Presented to modules to read and change their settings. Each module must be given the same value |
 | `GALAXY_PROBE_SECONDS` | 20 | How often each module is asked how it is doing |
 | `GALAXY_PROBE_VERIFY_TLS` | off | Check modules' certificates when asking |
 | `GALAXY_WEB_ROOT` | | Folder the page is served from (set by the image) |
@@ -75,9 +109,12 @@ automatically. Any other id is listed under its own name.
 - **What you are looking at inside a module is not in the address.** The address remembers which
   module, not which view or selection within it. "Open on its own" gives a module its full
   address bar back.
-- **Modules cannot be switched on, added or configured from the page yet.** The list comes from
-  the shell's settings.
-- **There is no sign-in**, here or in the modules.
+- **Modules cannot be switched on or added from the page yet.** The list comes from the shell's
+  own settings; the settings area configures the modules in it.
+- **Only modules built on the shared core take settings from here:** ESXi today.
+- **Viewing has no sign-in**, here or in the modules. Only the settings area does.
+- **Sign-ins end when the shell restarts**, and the admin password travels in the clear unless
+  the shell is served over HTTPS.
 
 Tests: `.venv/bin/pip install pytest httpx` once, then `.venv/bin/python -m pytest -q tests`
 from this directory.

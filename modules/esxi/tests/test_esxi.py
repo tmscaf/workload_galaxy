@@ -238,3 +238,66 @@ def test_live_mode_without_a_host_says_what_is_missing(monkeypatch):
 def test_placeholder_hardware_names_are_dropped():
     from esxigalaxy.graph import _real
     assert _real("System manufacturer") == "" and _real("To Be Filled By O.E.M.") == "" and _real("Supermicro") == "Supermicro"
+
+
+# ---------------------------------------------------------------------------------------------- settings from the suite
+def _app(tmp_path, **env):
+    from esxigalaxy.main import create_app
+    return create_app(environ={"ESXIGALAXY_MODE": "sample", "ESXIGALAXY_DATA_DIR": str(tmp_path), **env})
+
+
+def _ready(c):
+    for _ in range(100):
+        if c.get("/readyz").status_code == 200:
+            return
+        time.sleep(0.05)
+
+
+def test_settings_need_the_token_and_apply_without_a_restart(tmp_path):
+    auth = {"Authorization": "Bearer s3cret-token"}
+    with TestClient(_app(tmp_path, ESXIGALAXY_SETTINGS_TOKEN="s3cret-token")) as c:
+        _ready(c)
+        assert c.get("/api/v1/settings").status_code == 401                         # values are for the suite only
+        assert c.put("/api/v1/settings", json={"values": {"name": "x"}}).status_code == 401
+        assert c.put("/api/v1/settings", json={"values": {"name": "x"}}, headers={"Authorization": "Bearer wrong"}).status_code == 401
+        form = c.get("/api/v1/settings", headers=auth).json()
+        names = [f["name"] for f in form["fields"]]
+        assert form["writable"] and form["persistent"] and form["missing"] == []      # sample data needs no host
+        assert "password" in names and "groups" in names
+        assert not {"settings_token", "data_dir", "web_root", "log_level", "site_file"} & set(names)
+        assert c.get("/api/v1/meta").json()["estate"]["name"] == "esx-lab-01.example.net"
+        saved = c.put("/api/v1/settings", headers=auth, json={"values": {"name": "Lab one", "groups": "Web: web-*, proxy-*"}}).json()
+        assert saved["saved"] and saved["forgot"] == []
+        assert {f["name"]: f for f in saved["fields"]}["name"]["source"] == "saved"
+        _ready(c)
+        for _ in range(100):                                                         # the new reading replaces the old one
+            if c.get("/api/v1/meta").json()["estate"]["name"] == "Lab one":
+                break
+            time.sleep(0.05)
+        assert c.get("/api/v1/meta").json()["estate"]["name"] == "Lab one"
+        groups = {g["title"] for g in c.get("/api/v1/namespaces").json()["namespaces"]}
+        assert "Web" in groups and "Linux VMs" in groups
+        assert c.post("/api/v1/settings/test", headers=auth, json={"values": {}}).json()["ok"] is True
+        missing = c.post("/api/v1/settings/test", headers=auth, json={"values": {"mode": "live", "host": "esx.example"}}).json()
+        assert missing["ok"] is False and "User name" in missing["message"] and "Password" in missing["message"]
+        assert c.put("/api/v1/settings", headers=auth, json={"values": {"refresh_seconds": "soon"}}).status_code == 400
+        assert c.put("/api/v1/settings", headers=auth, json={"values": {"settings_token": "mine"}}).status_code == 400
+    with TestClient(_app(tmp_path, ESXIGALAXY_SETTINGS_TOKEN="s3cret-token")) as c:   # a restart keeps what was saved
+        _ready(c)
+        assert c.get("/api/v1/meta").json()["estate"]["name"] == "Lab one"
+
+
+def test_without_a_token_settings_cannot_be_read_or_changed(tmp_path):
+    with TestClient(_app(tmp_path, ESXIGALAXY_HOST="esx.example", ESXIGALAXY_USER="ro")) as c:
+        _ready(c)
+        form = c.get("/api/v1/settings").json()
+        assert form["writable"] is False and all(f["value"] is None and f["set"] is None for f in form["fields"])
+        assert "esx.example" not in str(form)
+        assert c.put("/api/v1/settings", json={"values": {"name": "x"}}).status_code == 403
+        assert c.post("/api/v1/settings/test", json={"values": {}}).status_code == 403
+
+
+def test_groups_setting_is_read_one_group_per_line():
+    from esxigalaxy.config import parse_groups
+    assert parse_groups("Web servers: web-*, proxy-*\n\nno colon here\nEmpty:\n Data : db-*") == [
+        {"id": "web-servers", "title": "Web servers", "match": ["web-*", "proxy-*"]}, {"id": "data", "title": "Data", "match": ["db-*"]}]

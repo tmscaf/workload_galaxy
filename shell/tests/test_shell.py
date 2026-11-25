@@ -80,3 +80,79 @@ def test_no_modules_configured_is_not_an_error():
     from galaxyshell.main import create_app
     with TestClient(create_app(load_settings({}, environ={}))) as c:
         assert c.get("/api/v1/modules").json()["modules"] == [] and c.get("/").status_code == 200
+
+
+# ---------------------------------------------------------------------------------------------- the settings area
+ACT = {"X-Requested-With": "workload-galaxy"}
+
+
+def _shell(calls, answer, **values):
+    from galaxyshell.config import load_settings
+    from galaxyshell.main import create_app
+    from galaxyshell.probe import Prober
+    settings = load_settings({"modules": "esxi=http://e:8092,kubernetes=http://k:8090", **values}, environ={})
+
+    def caller(module, method, path, *, body=None, token="", verify=False, timeout=20.0):
+        calls.append((module["id"], method, path, body, token))
+        return answer(module, method, path, body)
+    return create_app(settings, Prober(settings.module_list, seconds=3600, checker=lambda m, v: {"ok": True}), caller=caller)
+
+
+def test_settings_area_needs_a_sign_in_and_relays_with_the_token():
+    calls = []
+
+    def answer(module, method, path, body):
+        if module["id"] == "kubernetes":
+            return 404, {"detail": "Not Found"}
+        if path.endswith("/test"):
+            return 200, {"ok": True, "message": "Connected."}
+        if method == "PUT" and (body or {}).get("values", {}).get("port") == "x":
+            return 400, {"detail": "Port must be a whole number"}
+        return 200, {"writable": True, "fields": [{"name": "host", "value": "esx"}], "forgot": []}
+
+    with TestClient(_shell(calls, answer, admin_password="open-sesame", settings_token="tok")) as c:
+        assert c.get("/api/v1/session").json() == {"signedIn": False, "enabled": True, "canChange": True, "lockedFor": 0}
+        assert c.get("/api/v1/modules/esxi/settings").status_code == 401 and calls == []       # nothing reaches a module unsigned
+        assert c.post("/api/v1/login", json={"password": "open-sesame"}).status_code == 403    # a form on another site cannot sign in
+        assert c.post("/api/v1/login", json={"password": "nope"}, headers=ACT).status_code == 401
+        ok = c.post("/api/v1/login", json={"password": "open-sesame"}, headers=ACT)
+        assert ok.status_code == 200 and "httponly" in ok.headers["set-cookie"].lower() and "samesite=strict" in ok.headers["set-cookie"].lower()
+        form = c.get("/api/v1/modules/esxi/settings").json()
+        assert form["supported"] and form["canSave"] and calls[-1] == ("esxi", "GET", "api/v1/settings", None, "tok")
+        assert c.get("/api/v1/modules/kubernetes/settings").json() == {"supported": False}     # a module without a settings API
+        assert c.get("/api/v1/modules/nope/settings").status_code == 404
+        assert c.put("/api/v1/modules/esxi/settings", json={"values": {"host": "b"}}).status_code == 403    # no action header
+        saved = c.put("/api/v1/modules/esxi/settings", json={"values": {"host": "b"}}, headers=ACT)
+        assert saved.status_code == 200 and calls[-1] == ("esxi", "PUT", "api/v1/settings", {"values": {"host": "b"}}, "tok")
+        bad = c.put("/api/v1/modules/esxi/settings", json={"values": {"port": "x"}}, headers=ACT)
+        assert bad.status_code == 400 and bad.json()["detail"] == "Port must be a whole number"     # the module's own words
+        assert c.post("/api/v1/modules/esxi/settings/test", json={"values": {}}, headers=ACT).json()["message"] == "Connected."
+        assert c.post("/api/v1/logout", headers=ACT).status_code == 200
+        assert c.get("/api/v1/modules/esxi/settings").status_code == 401
+
+
+def test_settings_area_is_off_without_an_admin_password_and_read_only_without_a_token():
+    calls = []
+    with TestClient(_shell(calls, lambda *a: (200, {}))) as c:
+        assert c.get("/api/v1/session").json()["enabled"] is False
+        assert c.post("/api/v1/login", json={"password": ""}, headers=ACT).status_code == 403
+        assert c.get("/api/v1/modules/esxi/settings").status_code == 403 and calls == []
+    with TestClient(_shell(calls, lambda *a: (401, {"detail": "the settings token is missing or wrong"}), admin_password="pw")) as c:
+        c.post("/api/v1/login", json={"password": "pw"}, headers=ACT)
+        assert c.get("/api/v1/session").json()["canChange"] is False
+        refused = c.get("/api/v1/modules/esxi/settings")
+        assert refused.status_code == 409 and "same settings token" in refused.json()["detail"]
+        assert c.put("/api/v1/modules/esxi/settings", json={"values": {}}, headers=ACT).status_code == 403
+
+
+def test_wrong_passwords_lock_the_sign_in_and_an_unreachable_module_is_said_plainly():
+    calls = []
+    with TestClient(_shell(calls, lambda *a: (0, {"detail": "connection refused"}), admin_password="pw", settings_token="t")) as c:
+        for _ in range(5):
+            assert c.post("/api/v1/login", json={"password": "guess"}, headers=ACT).status_code == 401
+        assert c.post("/api/v1/login", json={"password": "pw"}, headers=ACT).status_code == 429      # even the right one, for a while
+        assert c.get("/api/v1/session").json()["lockedFor"] > 0
+    with TestClient(_shell(calls, lambda *a: (0, {"detail": "connection refused"}), admin_password="pw", settings_token="t")) as c:
+        c.post("/api/v1/login", json={"password": "pw"}, headers=ACT)
+        down = c.get("/api/v1/modules/esxi/settings")
+        assert down.status_code == 502 and down.json()["detail"] == "ESXi is not reachable (connection refused)"

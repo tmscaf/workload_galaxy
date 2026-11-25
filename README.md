@@ -28,6 +28,16 @@ things there need attention, so trouble in one is visible while you are looking 
 
 ![The suite bar with the module selector open](docs/screenshots/suite-bar.png)
 
+**Settings**, at the right of the bar, is where each module is told what to read: its host, its
+account, how things are grouped. It is behind one admin sign-in; a module's form is drawn from
+the settings the module declares, values can be tested before they are saved, and passwords are
+never shown back. Saved settings take effect at once, with no redeploy.
+
+![The settings area with a module's form](docs/screenshots/suite-settings.png)
+
+ESXi is configured this way today. The Kubernetes and Network modules still take their settings
+where they are deployed.
+
 ## Kubernetes module
 
 Start in **Triage** when something is broken. It lists every problem with its likely
@@ -178,9 +188,10 @@ nodes, edges and findings in the graph format, the refresh loop, and the API abo
 module is built on it. The Kubernetes and Network modules came first and still carry their own
 copies of that code.
 
-Each module built on the core also serves a manifest at `/api/v1/module`: what it is, what it
-needs, and its settings with labels, help text and which ones are secrets. That is what a
-module page will draw its forms from.
+Each module built on the core also serves a manifest at `/api/v1/module` (what it is, what it
+needs, and the settings it takes) and a settings API the suite's Settings page reads and writes.
+A module accepts changes only from a caller that presents the settings token it shares with the
+shell.
 
 ```
 core/
@@ -211,9 +222,9 @@ Planned, not yet built:
 2. **A shared front end.** Each module carries its own copy of the 3D engine and panels; the
    common parts should move to `core/web`, with each module supplying its node kinds, tables
    and panels.
-3. **A module page.** The shell lists the modules it is told about. Next: a page in it where
-   built-in modules are switched on and configured through a form drawn from their manifests,
-   and modules running elsewhere (the Kubernetes module inside a cluster) are added by URL.
+3. **Switching modules on from the page.** The Settings page configures the modules the shell
+   is told about. Next: adding a module by URL and switching built-in ones on from the same
+   page, instead of listing them in the shell's own settings.
 4. **Links between modules.** The same machine is a VM on the ESXi map, a device on the
    network map and a node on the Kubernetes map; selecting it in one should lead to the others.
 5. **More modules.** Any source that can be drawn as nodes and connections.

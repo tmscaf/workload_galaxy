@@ -9,6 +9,9 @@
     GET /api/v1/calls         every connection as a table row
     GET /api/v1/triage        findings: what looks wrong, why, what to do
     GET /api/v1/search        find something by name
+    GET /api/v1/settings      the module's settings as a form: fields, current values, where each comes from
+    PUT /api/v1/settings      save settings and start using them                 (needs the settings token)
+    POST /api/v1/settings/test   try settings without saving them                (needs the settings token)
     GET /healthz /readyz
     GET /                     the UI (works under any path prefix)
 
@@ -17,23 +20,29 @@ calls `.mount_ui()` last (a mount at "/" would shadow anything registered after 
 
 The app is created from settings, not at import time, so a host process can create, mount and
 replace modules as they are switched on and reconfigured.
+
+Settings are changed by the suite, not by a browser: writes need the settings token the suite and
+the module share (`Authorization: Bearer ...`). Without a token configured, a module takes its
+settings from its environment only and refuses changes.
 """
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 import mimetypes
 import os
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .graphops import filter_graph
 from .scale import collapse
+from .settings import SettingsError
 from .state import State
 
 log = logging.getLogger(__name__)
@@ -57,10 +66,13 @@ class _UIStatic(StaticFiles):
 class Galaxy:
     def __init__(self, *, app_id: str, title: str, version: str, build: str, state: State, web_root: str, mode: str,
                  manifest: dict, meta=None, triage_extra=None, calls_sort: str = "bps", detail_limit: int = 400,
-                 project_limit: int = 60, node_budget: int = 600):
+                 project_limit: int = 60, node_budget: int = 600, settings_api=None, settings_token: str = ""):
+        """`settings_api` lets the suite configure the module: an object with describe() -> dict,
+        apply(values) -> dict and test(values) -> dict (see galaxy_core.settings.Store)."""
         self.app_id, self.title, self.version, self.build = app_id, title, version, build
         self.state, self.web_root, self.mode, self.manifest = state, web_root, mode, manifest
         self._meta, self._triage_extra = meta, triage_extra
+        self._settings_api, self._settings_token = settings_api, settings_token or ""
         self.limits = {"detail_limit": detail_limit, "project_limit": project_limit, "budget": node_budget}
         self.started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         self._stamp = {"at": 0.0, "value": ""}
@@ -68,14 +80,22 @@ class Galaxy:
         @asynccontextmanager
         async def lifespan(_app: FastAPI):
             log.info("%s %s (build %s) starting (mode=%s)", app_id, version, build, mode)
-            state.start()
+            self.state.start()
             yield
-            state.stop()
+            self.state.stop()
 
         self.app = FastAPI(title=title, version=version, lifespan=lifespan, docs_url="/api/docs",
                            openapi_url="/api/openapi.json", redoc_url=None)
         self.app.add_middleware(GZipMiddleware, minimum_size=2048)
         self._routes(calls_sort)
+
+    def replace_state(self, state: State, mode: str | None = None) -> None:
+        """Start reading with new settings: the new state takes over, the old one is stopped."""
+        old, self.state = self.state, state
+        if mode is not None:
+            self.mode = mode
+        state.start()
+        old.stop()
 
     # ------------------------------------------------------------------ helpers a module's own routes use
     def graph_or_503(self) -> dict:
@@ -104,7 +124,7 @@ class Galaxy:
 
     # ------------------------------------------------------------------ the shared API
     def _routes(self, calls_sort: str) -> None:
-        app, state = self.app, self.state
+        app = self.app
 
         @app.get("/healthz", include_in_schema=False)
         def healthz():
@@ -112,16 +132,16 @@ class Galaxy:
 
         @app.get("/readyz", include_in_schema=False)
         def readyz():
-            if state.current() is None:
-                return JSONResponse({"ready": False, "error": state.error}, status_code=503)
+            if self.state.current() is None:
+                return JSONResponse({"ready": False, "error": self.state.error}, status_code=503)
             return {"ready": True}
 
         @app.get("/api/v1/meta")
         def meta():
-            graph = state.current() or {}
+            graph = self.state.current() or {}
             return {"version": self.version, "build": self.build, "startedAt": self.started_at, "assetBuild": self.build_id(),
-                    "mode": self.mode, "app": self.app_id, "title": self.title, "updatedAt": state.updated_at or None,
-                    "refreshSeconds": state.refresh_seconds, "error": state.error, "cluster": graph.get("cluster"),
+                    "mode": self.mode, "app": self.app_id, "title": self.title, "updatedAt": self.state.updated_at or None,
+                    "refreshSeconds": self.state.refresh_seconds, "error": self.state.error, "cluster": graph.get("cluster"),
                     "sources": graph.get("sources"), "podLogs": False, "inCluster": False,
                     **(self._meta(graph) if self._meta else {})}
 
@@ -144,7 +164,7 @@ class Galaxy:
 
         @app.get("/api/v1/node")
         def node(id: str, ns: str | None = None, platform: bool = False, expand: str | None = None, focus: bool = False):
-            detail = state.index().detail(id) if self.graph_or_503() else None
+            detail = self.state.index().detail(id) if self.graph_or_503() else None
             if not detail:
                 raise HTTPException(404, detail="unknown node")
             cmap = self.view(ns, expand, focus=focus)[1]
@@ -156,18 +176,18 @@ class Galaxy:
         def workloads(ns: str | None = None, platform: bool = False, q: str | None = None, sort: str = "risk",
                       desc: bool = True, offset: int = 0, limit: int = 100, problems: bool = False):
             self.graph_or_503()
-            return self._page(state.index().workload_rows(), ns, q, sort, desc, offset, limit, problems)
+            return self._page(self.state.index().workload_rows(), ns, q, sort, desc, offset, limit, problems)
 
         @app.get("/api/v1/calls")
         def calls(ns: str | None = None, platform: bool = False, q: str | None = None, sort: str = calls_sort,
                   desc: bool = True, offset: int = 0, limit: int = 100, problems: bool = False):
             self.graph_or_503()
-            return self._page(state.index().call_rows(), ns, q, sort, desc, offset, limit, problems)
+            return self._page(self.state.index().call_rows(), ns, q, sort, desc, offset, limit, problems)
 
         @app.get("/api/v1/search")
         def search(q: str):
             self.graph_or_503()
-            return {"hits": state.index().search(q)}
+            return {"hits": self.state.index().search(q)}
 
         @app.get("/api/v1/hotspots")
         def hotspots(ns: str | None = None, platform: bool = False):
@@ -195,6 +215,58 @@ class Galaxy:
         @app.get("/api/v1/demo/scenarios")
         def demo_scenarios():
             raise HTTPException(404, detail="this module has no scenarios")
+
+        if self._settings_api is not None:
+            self._settings_routes()
+
+    # ------------------------------------------------------------------ settings, for the suite
+    def _may_change(self, request: Request) -> None:
+        if not self._settings_token:
+            raise HTTPException(403, detail="this module takes its settings from where it is deployed (no settings token is set)")
+        sent = request.headers.get("authorization", "")
+        token = sent[7:] if sent.lower().startswith("bearer ") else ""
+        if not hmac.compare_digest(token.encode(), self._settings_token.encode()):
+            raise HTTPException(401, detail="the settings token is missing or wrong")
+
+    def _settings_routes(self) -> None:
+        app, api = self.app, self._settings_api
+
+        async def values(request: Request) -> dict:
+            try:
+                body = await request.json()
+            except ValueError:
+                raise HTTPException(400, detail="send JSON") from None
+            return (body or {}).get("values") if isinstance(body, dict) and "values" in body else body
+
+        @app.get("/api/v1/settings")
+        def settings(request: Request):
+            # Current values (addresses, account names) are for the suite only. Without a token the
+            # module says what it takes, not what it has.
+            desc = api.describe()
+            if self._settings_token:
+                self._may_change(request)
+            else:
+                desc["fields"] = [{**f, "value": None, "set": None, "source": None} for f in desc["fields"]]
+                desc["missing"] = []
+            return {"module": {"id": self.manifest.get("id"), "title": self.manifest.get("title")},
+                    "writable": bool(self._settings_token), "mode": self.mode, **desc}
+
+        @app.put("/api/v1/settings")
+        async def save_settings(request: Request):
+            self._may_change(request)
+            try:
+                result = api.apply(await values(request))
+            except SettingsError as err:
+                raise HTTPException(400, detail=str(err)) from err
+            return {"saved": True, **result, "writable": True, "mode": self.mode, **api.describe()}
+
+        @app.post("/api/v1/settings/test")
+        async def test_settings(request: Request):
+            self._may_change(request)
+            try:
+                return api.test(await values(request))
+            except SettingsError as err:
+                raise HTTPException(400, detail=str(err)) from err
 
     # ------------------------------------------------------------------ UI
     # The page loads its code from /v/<build>/..., so every deploy has new asset URLs and a browser can
