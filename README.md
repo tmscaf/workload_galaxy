@@ -201,6 +201,7 @@ modules/
   network/      collector, web UI, deploy (k8s, homelab, router sync script), tests
   esxi/         collector, web UI, deploy (k8s, homelab), tests
 shell/            the suite bar and module selector: app, web UI, deploy (k8s, homelab), tests
+tools/            cluster-secrets.sh: one private secrets file on the cluster -> Kubernetes Secrets
 docs/
   screenshots/
 ```
@@ -212,6 +213,26 @@ cd modules/kubernetes        # or modules/network
 python3 -m venv .venv && .venv/bin/pip install -r collector/requirements.txt pytest
 .venv/bin/python -m pytest -q tests
 ```
+
+## Secrets
+
+No password or token belongs in this repository, in a deploy command, or on a laptop. On a
+cluster, every secret the suite needs lives in one private file on the cluster machine
+(`~/.config/workload-galaxy/secrets.env`, readable only by its owner), and
+[`tools/cluster-secrets.sh`](tools/cluster-secrets.sh) turns that file into the Kubernetes
+Secrets each module reads:
+
+```bash
+ssh <cluster> 'bash -s -- init' < tools/cluster-secrets.sh   # once: build the file
+ssh <cluster> 'bash -s -- list' < tools/cluster-secrets.sh   # which values are set (never the values)
+ssh <cluster> 'bash -s -- sync' < tools/cluster-secrets.sh   # file -> Kubernetes Secrets
+```
+
+`init` copies in whatever the cluster's Secrets already hold, generates the values the suite
+invents itself (the Settings admin password, the settings token, the Kubernetes module's agent
+token) and leaves the rest empty to fill in. To change a secret, edit the file on the cluster
+and run `sync`: it rewrites only the Secrets that changed and restarts only the workloads that
+use them. The deploy scripts run `sync` themselves.
 
 ## Roadmap
 

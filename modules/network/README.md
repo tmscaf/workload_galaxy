@@ -133,7 +133,7 @@ Things to know:
   (UniFi: Settings > Admins > add a local admin with the role View Only).
 
 Setup: `NETGALAXY_UNIFI_URL` plus the login (on the home lab: the Secret `network-galaxy-unifi`, keys
-`user` and `password`, which `UNIFI_USER=... UNIFI_PASSWORD=... scripts/deploy-homelab.sh` creates),
+`user` and `password`, written from `UNIFI_USER` and `UNIFI_PASSWORD` in the cluster's secrets file),
 and `NETGALAXY_ISP_GATEWAY` for the first hop beyond the router. On Kubernetes the pod needs the
 sysctl `net.ipv4.ping_group_range` (it is in `deploy/k8s`); no capability or root is needed.
 
@@ -165,13 +165,13 @@ Tests: `cd collector && ../.venv/bin/python -m pytest -q ../tests`.
 ## Deploy to the home lab
 
 ```bash
-NTOPNG_USER=<user> NTOPNG_PASSWORD=<password> scripts/deploy-homelab.sh   # first time
-scripts/deploy-homelab.sh                                                # afterwards
+scripts/deploy-homelab.sh
 ```
 
 The script builds the image for amd64, ships it to the k3s node, creates the Rancher project and
-namespace `network-galaxy` on first use, stores the ntopng login in the Secret
-`network-galaxy-ntopng`, and applies `deploy/homelab`. The UI is at `http://192.168.1.20:8091`;
+namespace `network-galaxy` on first use, writes the module's Secrets from the cluster's private
+secrets file (see [Secrets](../../README.md#secrets); nothing secret is passed to the script),
+and applies `deploy/homelab`. The UI is at `http://192.168.1.20:8091`;
 syslog is received on UDP 5514. The device inventory lives on a small volume so history survives
 restarts.
 

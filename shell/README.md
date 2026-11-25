@@ -82,7 +82,8 @@ docker run --rm -p 8089:8080 --read-only -e GALAXY_MODULES="esxi=http://esxi-gal
 ```
 
 `deploy/k8s` is the Kubernetes base and `deploy/homelab` an overlay for one home lab;
-`scripts/deploy-homelab.sh` builds, ships and applies it.
+`scripts/deploy-homelab.sh` builds, ships and applies it. The admin password and the settings
+token come from the cluster's private secrets file (see [Secrets](../README.md#secrets)).
 
 ## Configuration
 

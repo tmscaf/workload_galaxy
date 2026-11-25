@@ -136,7 +136,8 @@ API. Nothing else is required. Optional, in the same namespace:
   with keys `user` and `password`, for deployments that set them here instead
 
 `deploy/homelab` is an overlay for one home lab, and `scripts/deploy-homelab.sh` builds, ships
-and applies it.
+and applies it. The account and the settings token come from the cluster's private secrets file
+(see [Secrets](../../README.md#secrets)); nothing secret is passed to the script.
 
 ## The site file
 
