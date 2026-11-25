@@ -1,0 +1,85 @@
+# Network Galaxy: one pod. It reads ntopng on the router (HTTPS, read-only user), listens for the
+# router's remote syslog on UDP 5514, reads a UniFi controller (HTTPS, view-only user) and pings
+# the router, the internet, access points and Wi-Fi devices. It needs no Kubernetes API access at all.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: network-galaxy-data
+  labels: {app.kubernetes.io/name: network-galaxy}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 200Mi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: network-galaxy
+  labels: {app.kubernetes.io/name: network-galaxy}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app.kubernetes.io/name: network-galaxy}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: network-galaxy}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 0
+        fsGroup: 0
+        seccompProfile: {type: RuntimeDefault}
+        # Lets the app send pings without any extra capability (a "safe" sysctl; many runtimes set it already).
+        sysctls: [{name: net.ipv4.ping_group_range, value: "0 2147483647"}]
+      containers:
+        - name: network-galaxy
+          image: network-galaxy
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: syslog, containerPort: 5514, protocol: UDP}
+          envFrom:
+            - configMapRef: {name: network-galaxy-config}
+          env:
+            - name: NETGALAXY_NTOPNG_USER
+              valueFrom: {secretKeyRef: {name: network-galaxy-ntopng, key: user}}
+            - name: NETGALAXY_NTOPNG_PASSWORD
+              valueFrom: {secretKeyRef: {name: network-galaxy-ntopng, key: password}}
+            # Blocking: the password for actions and the token the router's sync script presents.
+            # Optional: without this Secret the app runs watch-only.
+            - name: NETGALAXY_ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: network-galaxy-actions, key: admin-password, optional: true}}
+            - name: NETGALAXY_BLOCKLIST_TOKEN
+              valueFrom: {secretKeyRef: {name: network-galaxy-actions, key: blocklist-token, optional: true}}
+            # Wi-Fi: a view-only login on the UniFi controller. Optional: without this Secret the Wi-Fi
+            # tab still measures latency and loss, and says the controller login is missing.
+            - name: NETGALAXY_UNIFI_USER
+              valueFrom: {secretKeyRef: {name: network-galaxy-unifi, key: user, optional: true}}
+            - name: NETGALAXY_UNIFI_PASSWORD
+              valueFrom: {secretKeyRef: {name: network-galaxy-unifi, key: password, optional: true}}
+            - {name: NETGALAXY_CONFIG_FILE, value: /config/site.json}
+            - {name: NETGALAXY_DATA_DIR, value: /data}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: site, mountPath: /config, readOnly: true}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 384Mi}
+          readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 10, failureThreshold: 6}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 20, failureThreshold: 3}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: network-galaxy-data}
+        - name: site
+          configMap: {name: network-galaxy-site}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: network-galaxy
+  labels: {app.kubernetes.io/name: network-galaxy}
+spec:
+  selector: {app.kubernetes.io/name: network-galaxy}
+  ports: [{name: http, port: 80, targetPort: http}]

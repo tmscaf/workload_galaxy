@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Network Galaxy</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='5' fill='%2390e0ff'/%3E%3Cellipse cx='16' cy='16' rx='14' ry='6' fill='none' stroke='%239b7bff' stroke-width='2' transform='rotate(-25 16 16)'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/app.css">
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/addons/" } }
+  </script>
+</head>
+<body>
+  <div id="stage" aria-label="Map of the network"></div>
+  <div id="labels"></div>
+
+  <header id="topbar" class="glass">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="4.5" fill="var(--core)"/><ellipse cx="16" cy="16" rx="14" ry="5.5" fill="none" stroke="var(--violet)" stroke-width="1.6" transform="rotate(-25 16 16)"/><circle cx="27" cy="11" r="1.6" fill="var(--cyan)"/></svg>
+      <span class="title">Network Galaxy</span>
+      <span id="version" class="chip subtle version" hidden></span>
+      <span id="netName" class="chip subtle" hidden></span>
+    </div>
+    <nav class="sections" aria-label="Section">
+      <button data-section="triage" title="What needs attention on the network, why, and what to do about it">Triage<span id="triageBadge" class="badge" hidden></span></button>
+      <button data-section="topology" title="Every device, what it talks to and how much, as a live map">Map</button>
+      <button data-section="wifi" title="Where a connection breaks: latency and loss hop by hop, access points, and every Wi-Fi device's signal and drops">Wi-Fi<span id="wifiBadge" class="badge" hidden></span></button>
+      <button data-section="vpn" title="Who is connected to the router's VPN, and recent connects, disconnects and failed logins">VPN<span id="vpnBadge" class="badge vpn" hidden></span></button>
+    </nav>
+    <div class="seg" id="viewSeg" role="tablist" aria-label="Map view">
+      <span class="eyebrow">View</span>
+      <button data-view="galaxy" class="on" role="tab" title="Devices by group, with the internet services they use around the rim">Galaxy</button>
+      <button data-view="strata" role="tab" title="Layers: the internet, your devices, their addresses, and the router they hang off">Strata</button>
+    </div>
+    <div class="ns-picker">
+      <button id="nsButton" class="btn" aria-haspopup="true" aria-expanded="false">
+        <span class="eyebrow">Groups</span> <span id="nsSummary">All</span> <span class="caret">▾</span>
+      </button>
+      <div id="nsMenu" class="glass menu" hidden>
+        <div class="menu-head">
+          <input id="nsFilter" type="search" placeholder="Filter groups" autocomplete="off">
+          <div class="menu-actions"><button id="nsAll" class="link">All</button><button id="nsNone" class="link">Clear</button></div>
+        </div>
+        <ul id="nsList"></ul>
+      </div>
+    </div>
+    <div class="search">
+      <input id="search" type="search" placeholder="Find a device, service, address…" autocomplete="off" aria-label="Search">
+      <ul id="searchResults" class="glass menu" hidden></ul>
+    </div>
+    <div class="spacer"></div>
+    <div id="sources" class="sources"></div>
+    <div id="session" class="session" hidden></div>
+    <div id="live" class="live" title="How fresh the picture is"><span class="dot"></span><span id="liveText">connecting…</span></div>
+  </header>
+
+  <aside id="rail" class="glass">
+    <section id="netBox" class="rail-section"></section>
+    <section id="scaleBox" class="rail-section" hidden></section>
+    <section id="layers" class="rail-section">
+      <h2>Layers</h2>
+      <ol class="layers"></ol>
+    </section>
+    <section class="rail-section">
+      <h2>Needs attention</h2>
+      <ol id="hotspots" class="list"></ol>
+    </section>
+    <section class="rail-section">
+      <h2>Busiest right now</h2>
+      <ol id="paths" class="list"></ol>
+    </section>
+  </aside>
+
+  <main id="triage" class="glass" hidden aria-label="Triage"></main>
+  <main id="vpn" class="glass" hidden aria-label="VPN"></main>
+  <main id="wifi" class="glass" hidden aria-label="Wi-Fi and connection health"></main>
+
+  <aside id="drawer" class="glass" hidden>
+    <button id="drawerClose" class="icon-btn" aria-label="Close details">×</button>
+    <div id="drawerBody"></div>
+  </aside>
+
+  <div id="legend" class="glass">
+    <div class="legend-row">
+      <span class="lg"><span class="sw vol"></span>brighter, busier line = more traffic</span>
+      <span class="lg"><span class="sw" style="--c:var(--cyan)"></span>inside your network</span>
+      <span class="lg"><span class="sw" style="--c:#ffd75e"></span>to the internet</span>
+      <span class="lg"><span class="sw dashed"></span>port forward, no traffic seen</span>
+    </div>
+    <div class="legend-row">
+      <span class="lg"><span class="sw pt grp"></span>device, coloured by group</span>
+      <span class="lg"><span class="sw pt" style="--c:var(--warn)"></span>warning</span>
+      <span class="lg"><span class="sw pt" style="--c:var(--crit)"></span>critical</span>
+      <span class="lg"><span class="sw pt off"></span>offline device (dimmed)</span>
+    </div>
+    <div class="legend-row toggles">
+      <label class="focus-toggle" title="Draw only what has a finding, with what it talks to. Everything else stays rolled up into its group."><input type="checkbox" id="tFocus"> Problems only</label>
+      <label title="Names on the map"><input type="checkbox" id="tLabels" checked> Labels</label>
+      <label title="Let the map turn slowly when left alone"><input type="checkbox" id="tRotate" checked> Drift</label>
+    </div>
+  </div>
+
+  <div id="signin" class="signin-back" hidden>
+    <form id="signinForm" class="signin glass" autocomplete="on">
+      <div class="si-h">Sign in</div>
+      <p id="signinWhat" class="si-what"></p>
+      <input type="text" name="username" value="admin" autocomplete="username" hidden>
+      <input id="signinPassword" type="password" placeholder="Password" autocomplete="current-password" aria-label="Password">
+      <p id="signinError" class="si-err" role="alert" hidden></p>
+      <div class="si-btns"><button id="signinSubmit" class="btn" type="submit">Sign in</button><button id="signinCancel" class="btn" type="button">Cancel</button></div>
+      <p class="si-foot">Viewing is open to everyone on your network. Blocking needs the password; a sign-in lasts 12 hours.</p>
+    </form>
+  </div>
+  <div id="notices" aria-live="polite"></div>
+
+  <div id="tooltip" class="glass" hidden></div>
+  <div id="toast" hidden></div>
+  <div id="updateBanner" class="glass" hidden>
+    <span id="updateText"></span>
+    <button id="updateReload" class="btn">Reload</button>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
