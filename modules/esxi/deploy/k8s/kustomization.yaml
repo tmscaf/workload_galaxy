@@ -1,0 +1,8 @@
+# Base install. Two things are not here and must exist in the namespace:
+#   ConfigMap esxi-galaxy-config   ESXIGALAXY_HOST and any other settings (see the README)
+#   Secret    esxi-galaxy-host     keys: user, password (the read-only account)
+# The homelab overlay shows both.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - esxi-galaxy.yaml

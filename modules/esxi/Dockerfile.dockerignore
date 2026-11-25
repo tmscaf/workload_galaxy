@@ -1,0 +1,9 @@
+# The build context is the repository root: send only what this image copies.
+*
+!core/py/galaxy_core
+!modules/esxi/VERSION
+!modules/esxi/collector
+!modules/esxi/web
+**/__pycache__
+**/*.pyc
+**/.DS_Store
