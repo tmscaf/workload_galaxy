@@ -3,7 +3,7 @@
 A live map of a home or small-office network: every device, what each one is talking to on the
 internet, what the firewall is turning away, and anything that looks abnormal.
 
-It is a sibling of [Workload Galaxy](../kubernetes): the same 3D front end and the
+It is a sibling of the [Kubernetes module](../kubernetes): the same 3D front end and the
 same graph format, fed by a pfSense router instead of a Kubernetes cluster.
 
 | On the map | Means |
@@ -250,7 +250,7 @@ collector/netgalaxy/   ntopng.py (client), syslog.py (receiver + parsers), devic
                        probes.py (reachability), graph.py (builder), findings.py (checks),
                        pinger.py (latency and loss), unifi.py (controller client), wifi.py (where a connection breaks),
                        state.py (refresh loop), main.py (API), sample.py (sample network),
-                       scale.py + graphops.py (shared with Workload Galaxy)
+                       scale.py + graphops.py (shared with the Kubernetes module)
 web/                   the front end (Three.js, no build step)
 deploy/k8s, deploy/homelab, deploy/router (pfSense sync script), scripts/deploy-homelab.sh
 tests/
