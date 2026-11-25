@@ -16,6 +16,11 @@ FIELDS = [
                "to check it on: {\"modules\": [{\"id\", \"title\", \"url\", \"probeUrl\"}]}."),
     Field("probe_seconds", kind="int", default=20, minimum=5, label="Check modules every (seconds)", group="Modules", advanced=True),
     Field("probe_verify_tls", kind="bool", default=False, label="Check module certificates", group="Modules", advanced=True),
+    Field("admin_password", label="Admin password", group="Settings area", secret=True,
+          help="Needed to open the settings area. Empty: the settings area is turned off."),
+    Field("settings_token", label="Settings token", group="Settings area", secret=True,
+          help="Shared with the modules, which accept settings changes only from a caller that presents it. "
+               "Empty: settings can be read here but not changed."),
     Field("web_root", kind="path", label="UI folder", group="Serving", advanced=True),
     Field("log_level", default="INFO", label="Log level", group="Serving", advanced=True),
 ]

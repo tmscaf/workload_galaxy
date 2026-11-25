@@ -1,6 +1,10 @@
 """The shell's HTTP app.
 
     GET /api/v1/modules   the modules, in order, each with how it is doing
+    GET /api/v1/session, POST /api/v1/login, POST /api/v1/logout      the settings area's sign-in
+    GET /api/v1/modules/{id}/settings        a module's settings as a form            (needs a session)
+    PUT /api/v1/modules/{id}/settings        save them; the module starts using them  (needs a session)
+    POST /api/v1/modules/{id}/settings/test  try them without saving                  (needs a session)
     GET /api/v1/version
     GET /healthz /readyz
     GET /                 the page: the bar, and the selected module underneath
@@ -13,18 +17,24 @@ import mimetypes
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+import threading
+
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+
+from galaxy_core.auth import ACTION_HEADER, SESSION_SECONDS, Auth
 
 from . import __build__, __version__
 from .config import load_settings
-from .probe import Prober
+from .probe import Prober, call
 
 log = logging.getLogger("galaxyshell")
 
 
-def create_app(settings=None, prober: Prober | None = None) -> FastAPI:
+def create_app(settings=None, prober: Prober | None = None, caller=call) -> FastAPI:
     settings = settings or load_settings()
+    auth = Auth(settings.admin_password)
+    by_id = {m["id"]: m for m in settings.module_list}
     logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     prober = prober or Prober(settings.module_list, settings.probe_seconds, settings.probe_verify_tls)
 
@@ -68,6 +78,103 @@ def create_app(settings=None, prober: Prober | None = None) -> FastAPI:
     def modules():
         return {"version": __version__, "build": __build__, "checkEverySeconds": settings.probe_seconds,
                 "modules": prober.snapshot()}
+
+    # ------------------------------------------------------------------ the settings area
+    # The browser signs in here, once. The shell then speaks to each module on its behalf, presenting
+    # the settings token the modules share with it; a module's own credentials pass through and are
+    # never kept by the shell.
+    def client(request: Request) -> str:
+        return request.client.host if request.client else ""
+
+    def action(request: Request) -> None:
+        """A header another site's page cannot send, so a stray link cannot change anything."""
+        if request.headers.get(ACTION_HEADER, "").lower() != "workload-galaxy":
+            raise HTTPException(403, detail="missing the action header")
+
+    def session(request: Request) -> None:
+        if not auth.enabled:
+            raise HTTPException(403, detail="the settings area is turned off (no admin password is set)")
+        if not auth.valid(request.cookies.get(auth.cookie)):
+            raise HTTPException(401, detail="sign in to open settings")
+
+    def module(mid: str) -> dict:
+        if mid not in by_id:
+            raise HTTPException(404, detail="no such module")
+        return by_id[mid]
+
+    def relay(status: int, payload: dict, m: dict):
+        if status == 0:
+            raise HTTPException(502, detail=f"{m['title']} is not reachable ({payload.get('detail') or 'no answer'})")
+        if status == 404:
+            return {"supported": False}
+        if status in (401, 403):
+            raise HTTPException(409, detail=f"{m['title']} refused: {payload.get('detail') or 'not allowed'}. "
+                                            "The module and the shell must be given the same settings token.")
+        if status >= 400:
+            raise HTTPException(status if status < 500 else 502, detail=payload.get("detail") or f"{m['title']} answered {status}")
+        return {"supported": True, **payload}
+
+    @app.get("/api/v1/session")
+    def get_session(request: Request):
+        return {"signedIn": auth.valid(request.cookies.get(auth.cookie)), "enabled": auth.enabled,
+                "canChange": bool(settings.settings_token), "lockedFor": auth.locked(client(request))}
+
+    @app.post("/api/v1/login")
+    async def login(request: Request):
+        action(request)
+        if not auth.enabled:
+            raise HTTPException(403, detail="the settings area is turned off (no admin password is set)")
+        wait = auth.locked(client(request))
+        if wait:
+            raise HTTPException(429, detail=f"too many wrong passwords; try again in {wait} s")
+        body = await request.json()
+        token = auth.login(client(request), str((body or {}).get("password") or ""))
+        if not token:
+            raise HTTPException(401, detail="wrong password")
+        resp = JSONResponse({"signedIn": True})
+        resp.set_cookie(auth.cookie, token, max_age=SESSION_SECONDS, httponly=True, samesite="strict", path="/")
+        return resp
+
+    @app.post("/api/v1/logout")
+    def logout(request: Request):
+        action(request)
+        resp = JSONResponse({"signedIn": False})
+        resp.delete_cookie(auth.cookie, path="/")
+        return resp
+
+    @app.get("/api/v1/modules/{mid}/settings")
+    def module_settings(mid: str, request: Request):
+        session(request)
+        m = module(mid)
+        out = relay(*caller(m, "GET", "api/v1/settings", token=settings.settings_token, verify=settings.probe_verify_tls), m)
+        if out.get("supported"):
+            out["canSave"] = bool(out.get("writable")) and bool(settings.settings_token)
+        return out
+
+    async def forward(mid: str, request: Request, method: str, path: str):
+        action(request)
+        session(request)
+        m = module(mid)
+        if not settings.settings_token:
+            raise HTTPException(403, detail="the shell has no settings token, so it cannot change a module's settings")
+        try:
+            body = await request.json()
+        except ValueError:
+            raise HTTPException(400, detail="send JSON") from None
+        out = relay(*caller(m, method, path, body=body, token=settings.settings_token, verify=settings.probe_verify_tls), m)
+        out["canSave"] = True
+        return out
+
+    @app.put("/api/v1/modules/{mid}/settings")
+    async def save_module_settings(mid: str, request: Request):
+        out = await forward(mid, request, "PUT", "api/v1/settings")
+        log.info("settings of %s changed from %s", mid, client(request))
+        threading.Thread(target=prober.refresh, daemon=True).start()      # show the module's new state without waiting
+        return out
+
+    @app.post("/api/v1/modules/{mid}/settings/test")
+    async def test_module_settings(mid: str, request: Request):
+        return await forward(mid, request, "POST", "api/v1/settings/test")
 
     def index():
         path = web_file("index.html")

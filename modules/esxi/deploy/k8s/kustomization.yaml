@@ -1,7 +1,8 @@
-# Base install. Two things are not here and must exist in the namespace:
-#   ConfigMap esxi-galaxy-config   ESXIGALAXY_HOST and any other settings (see the README)
-#   Secret    esxi-galaxy-host     keys: user, password (the read-only account)
-# The homelab overlay shows both.
+# Base install. Nothing else is required: with no settings the module starts unconfigured and is
+# given its host from the suite's Settings page. Optional, all in the same namespace:
+#   Secret    esxi-galaxy-settings   key: token (the settings token shared with the suite shell)
+#   ConfigMap esxi-galaxy-config     ESXIGALAXY_* settings, for deployments that set them here
+#   Secret    esxi-galaxy-host       keys: user, password (the read-only account), likewise
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:

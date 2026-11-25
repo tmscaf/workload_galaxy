@@ -25,6 +25,33 @@ def _get(url: str, verify: bool) -> dict:
         return json.loads(res.read(4_000_000).decode("utf-8", "replace"))
 
 
+def call(module: dict, method: str, path: str, *, body: dict | None = None, token: str = "", verify: bool = False,
+         timeout: float = 20.0) -> tuple[int, dict]:
+    """One request to a module's API on the shell's behalf -> (status, JSON body). A module that cannot
+    be reached is (0, {"detail": why})."""
+    ctx = None if verify else ssl._create_unverified_context()
+    headers = {"Accept": "application/json", "User-Agent": "workload-galaxy-shell"}
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        headers["Content-Type"] = "application/json"
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(module["probeUrl"] + path, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as res:      # noqa: S310 - http(s) only, checked in config
+            return res.status, json.loads(res.read(4_000_000).decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as err:
+        try:
+            payload = json.loads(err.read(200_000).decode("utf-8", "replace") or "{}")
+        except ValueError:
+            payload = {}
+        return err.code, payload if isinstance(payload, dict) else {"detail": str(payload)}
+    except (urllib.error.URLError, OSError, ValueError) as err:
+        reason = getattr(err, "reason", err)
+        return 0, {"detail": (getattr(reason, "strerror", None) or str(reason) or "no answer").lower()}
+
+
 def check(module: dict, verify: bool = False) -> dict:
     """One module's status. Never raises: a module that is down is a status, not an error."""
     out = {"ok": False, "error": None, "version": "", "mode": "", "name": "", "problems": None, "critical": None,

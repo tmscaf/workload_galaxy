@@ -1,5 +1,6 @@
 # Workload Galaxy shell: one stateless pod. It reads each module's public API to show its state and
-# needs no Kubernetes API access, no volume and no secret.
+# needs no Kubernetes API access and no volume. The Secret workload-galaxy-shell-settings (keys:
+# admin-password, settings-token) turns the Settings area on; without it the area stays off.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -26,6 +27,11 @@ spec:
             - {name: http, containerPort: 8080}
           envFrom:
             - configMapRef: {name: workload-galaxy-shell-config}
+          env:
+            - name: GALAXY_ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: workload-galaxy-shell-settings, key: admin-password, optional: true}}
+            - name: GALAXY_SETTINGS_TOKEN
+              valueFrom: {secretKeyRef: {name: workload-galaxy-shell-settings, key: settings-token, optional: true}}
           resources:
             requests: {cpu: 10m, memory: 48Mi}
             limits: {memory: 128Mi}

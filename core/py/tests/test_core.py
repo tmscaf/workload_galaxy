@@ -109,3 +109,47 @@ def test_index_tables_search_and_detail_use_the_module_hooks():
     d = idx.detail("wl:red/VM/a")
     assert {n["id"] for n in d["nodes"]} >= {"wl:red/VM/a", "ext:net", "host:h1"} and d["findings"][0]["title"] == "a is full"
     assert idx.detail("wl:red/VM/a->ext:net")["edges"][0]["type"] == "attached" and idx.detail("nope") is None
+
+
+# ---------------------------------------------------------------------------------------------- saved settings
+def _store(tmp_path, env=None):
+    from galaxy_core.settings import Store
+    fields = [Field("host", label="Host", required=True), Field("user", label="User", required=True),
+              Field("password", label="Password", secret=True, required=True, bound_to=("host", "user")),
+              Field("port", kind="int", default=443, minimum=1), Field("groups", kind="text"),
+              Field("mode", default="live", choices=("live", "sample")), Field("data_dir", kind="path", editable=False)]
+    return Store(fields, "X", str(tmp_path / "settings.json"), environ=env if env is not None else {})
+
+
+def test_saved_settings_win_over_the_environment_and_survive_a_restart(tmp_path):
+    import os
+    import stat
+    st = _store(tmp_path, {"X_HOST": "from-env", "X_USER": "ro", "X_PASSWORD": "env-secret"})
+    assert st.effective().host == "from-env"
+    desc = {f["name"]: f for f in st.describe()["fields"]}
+    assert desc["host"]["source"] == "environment" and desc["port"]["source"] == "default"
+    assert desc["password"]["value"] is None and desc["password"]["set"] is True          # set, never shown
+    assert "data_dir" not in desc                                                         # not changeable from a page
+    st.update({"port": "8443", "groups": "Web: web-*\r\nData: db-*"})
+    s = st.effective()
+    assert (s.host, s.port, s.groups, s.password) == ("from-env", 8443, "Web: web-*\nData: db-*", "env-secret")
+    path = tmp_path / "settings.json"
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600 and "env-secret" not in path.read_text()
+    again = _store(tmp_path, {"X_HOST": "from-env", "X_USER": "ro", "X_PASSWORD": "env-secret"})
+    assert again.effective().port == 8443 and {f["name"]: f for f in again.describe()["fields"]}["port"]["source"] == "saved"
+
+
+def test_a_secret_is_forgotten_when_what_it_belongs_to_changes(tmp_path):
+    import pytest
+    from galaxy_core.settings import SettingsError
+    st = _store(tmp_path, {"X_HOST": "esx-a", "X_USER": "ro", "X_PASSWORD": "secret-a"})
+    assert st.update({"port": 444}) == [] and st.effective().password == "secret-a"       # unrelated change: kept
+    assert st.update({"password": ""}) == [] and st.effective().password == "secret-a"    # an empty box means keep it
+    assert st.preview({"host": "esx-b"}).password == "" and st.effective().password == "secret-a"   # a preview saves nothing
+    assert st.update({"host": "esx-b"}) == ["Password"]                                   # pointed elsewhere: forgotten,
+    assert st.effective().password == "" and st.describe()["missing"] == ["Password"]     # even though the environment has one
+    assert st.update({"host": "esx-c", "password": "secret-c"}) == [] and st.effective().password == "secret-c"
+    for bad in ({"port": "many"}, {"mode": "weird"}, {"data_dir": "/tmp/x"}, {"nope": 1}, ["host"]):
+        with pytest.raises(SettingsError):
+            st.update(bad)
+    assert st.effective().host == "esx-c"                                                 # a refused change saves nothing
