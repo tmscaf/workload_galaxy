@@ -33,5 +33,6 @@ jobs:
           # Signatures are kept on their own branch, so rules that protect main do not block them.
           branch: cla-signatures
           path-to-signatures: signatures/cla.json
-          allowlist: tmscaf,dependabot[bot],github-actions[bot]
+          # "claude" is the account GitHub shows for commits co-authored with Claude; it has nothing to sign.
+          allowlist: tmscaf,claude,dependabot[bot],github-actions[bot]
           lock-pullrequest-aftermerge: false
