@@ -3,6 +3,7 @@
 *.heic
 # OS / editor / tooling
 .DS_Store
+*.code-workspace
 .venv/
 __pycache__/
 *.pyc

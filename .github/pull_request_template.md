@@ -16,4 +16,4 @@
 
 - [ ] The module's `CHANGELOG.md` and `VERSION` are updated, if behaviour changed
 - [ ] No addresses, host names, accounts or secrets from a real environment are in the change
-- [ ] I agree to the contribution terms in [CONTRIBUTING.md](../CONTRIBUTING.md#licence-of-contributions)
+- [ ] I have signed the [Contributor Licence Agreement](../CLA.md), or will when the CLA check asks
