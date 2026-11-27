@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Troy Scafuro
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Procedural canvas textures (no image assets, so the UI works air-gapped).
 import * as THREE from 'three';
 

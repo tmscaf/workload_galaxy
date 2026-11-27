@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Troy Scafuro
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // The VPN panel: who is connected to the router's VPN now, and what the VPN server has seen lately.
 //
 // Data: GET api/v1/vpn (the router's once-a-minute status report plus its forwarded VPN log).

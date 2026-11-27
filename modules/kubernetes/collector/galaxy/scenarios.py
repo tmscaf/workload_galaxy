@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Fault scenarios for the demo cluster.
 
 Each scenario mutates a per-refresh copy of the demo cluster (a `World`):

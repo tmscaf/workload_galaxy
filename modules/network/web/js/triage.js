@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Troy Scafuro
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // The Triage view: one screen that answers "is anything on my network worth worrying about, and
 // what do I do about it".
 //

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Synthetic OpenShift-like cluster for GALAXY_MODE=demo.
 
 Produces raw API objects, agent reports and mesh metrics that run through the

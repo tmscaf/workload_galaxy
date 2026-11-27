@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Wi-Fi and connection health: the pinger's bookkeeping, the UniFi reader, the diagnosis, the map and the API."""
 import json
 

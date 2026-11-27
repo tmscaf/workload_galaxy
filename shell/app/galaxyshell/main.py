@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """The shell's HTTP app.
 
     GET /api/v1/modules   the modules, in order, each with whether it is on and how it is doing

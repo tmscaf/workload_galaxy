@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Which modules are turned on.
 
 A module that is off stays in the shell's list, but it is left out of the selector and the shell

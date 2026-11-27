@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Troy Scafuro
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // The settings area: which modules are on, and where each one gets its data from.
 //
 // One sign-in for the suite. Each module's form is drawn from what the module itself says it takes

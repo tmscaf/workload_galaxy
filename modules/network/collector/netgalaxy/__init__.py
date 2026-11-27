@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Network Galaxy - a live map of a home or small-office network: every device, what it talks to
 on the internet, what the firewall is turning away, and anything that looks abnormal.
 

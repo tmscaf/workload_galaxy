@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """VPN sessions: the router's status report, the VPN log, the map and the API."""
 import json
 

@@ -1,7 +1,8 @@
 # Contributing
 
 Thanks for looking. This page says how to run things, what a change needs before it is merged,
-and the terms a contribution comes in under.
+and the terms a contribution comes in under. Everyone taking part is expected to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Run it
 
@@ -46,6 +47,9 @@ every push and pull request.
   (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, `example.net`).
 - **No secrets, ever.** Not in code, tests, manifests or commit messages. See
   [Secrets](README.md#secrets).
+- **The licence header on new source files.** Every source file starts with the same two lines,
+  in that language's comment style: `Copyright (C) 2026 Troy Scafuro` and
+  `SPDX-License-Identifier: AGPL-3.0-only`. Copy them from the file next to yours.
 - **The changelog and version** of the part you changed (`CHANGELOG.md`, `VERSION`), when
   behaviour changes.
 

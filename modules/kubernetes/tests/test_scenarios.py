@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Each fault scenario must surface its root cause on the right strata layer - and nowhere else."""
 import pytest
 

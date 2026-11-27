@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Troy Scafuro
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Three.js rendering: one scene, two arrangements (galaxy / strata) blended by view weights.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';

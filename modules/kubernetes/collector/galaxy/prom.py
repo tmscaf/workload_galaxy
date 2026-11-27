@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Optional request-level latency from Prometheus (Istio / OpenShift Service Mesh metrics).
 
 On OpenShift point GALAXY_PROMETHEUS_URL at the Thanos querier

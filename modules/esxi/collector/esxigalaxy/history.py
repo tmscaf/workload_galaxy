@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """What the module remembers between readings: how busy each VM has been, and what changed.
 
 Peaks are kept per day for two weeks, so sizing advice rests on the busiest a VM has been in that

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Graph operations every module shares: scope a graph to some groups, and turn a findings list into
 the totals, patterns and capped list one response carries."""
 from __future__ import annotations

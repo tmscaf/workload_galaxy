@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Build one part of the suite and put it on a k3s cluster that has no image registry: the image is
 # built here, shipped to the node as a tarball, imported, and the part's manifests are applied.
 #
@@ -28,7 +31,7 @@ case "${PART}" in
   network)    DIR=modules/network;    NS=network-galaxy;        IMAGE_NAME=network-galaxy;        PROJECT="Network Galaxy";        ARG=NETGALAXY;  WORKLOADS="deploy/network-galaxy" ;;
   esxi)       DIR=modules/esxi;       NS=esxi-galaxy;           IMAGE_NAME=esxi-galaxy;           PROJECT="ESXi Galaxy";           ARG=ESXIGALAXY; WORKLOADS="deploy/esxi-galaxy" ;;
   shell)      DIR=shell;              NS=workload-galaxy-shell; IMAGE_NAME=workload-galaxy-shell; PROJECT="Workload Galaxy Shell"; ARG=GALAXY;     WORKLOADS="deploy/workload-galaxy-shell" ;;
-  *) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '5,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
 
 CONFIG="${GALAXY_DEPLOY_CONFIG:-$HOME/.config/workload-galaxy/deploy.env}"

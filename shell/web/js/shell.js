@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Troy Scafuro
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // The suite bar: a static brand, the module selector, and the selected module in a frame below.
 //
 // The module in view is kept in the address (#esxi) so a link or a reload comes back to it, and

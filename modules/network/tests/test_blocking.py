@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Blocking: what may be blocked, the action login, and the list the router pulls."""
 import importlib
 import time

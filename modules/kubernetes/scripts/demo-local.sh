@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Run the showcase on this machine: a simulated OpenShift cluster with real-looking failures, so you
 # can see everything the board does without a cluster. Needs Docker; touches nothing else.
 #

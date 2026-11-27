@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Builders for the graph format the front end draws.
 
 The format grew up describing Kubernetes, so its field names do too: a "workload" with "pods" on a

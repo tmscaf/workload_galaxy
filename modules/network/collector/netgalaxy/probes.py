@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Is a server there? A cheap reachability check for the few addresses where a wrong answer matters.
 
 ntopng only knows a device while it is sending or receiving, and forgets it after a few idle

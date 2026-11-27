@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Read-only client for ntopng's REST API (the traffic source; ntopng runs on the router).
 
 Only GET requests, with a user that has no admin rights. Listing flows is slow on a small router

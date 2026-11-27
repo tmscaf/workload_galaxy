@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """ESXi Galaxy - a live map of a VMware ESXi host: every virtual machine, the networks and datastores
 it hangs off, how full the host is, and what needs attention.
 

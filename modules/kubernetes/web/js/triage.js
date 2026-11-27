@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Troy Scafuro
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // The Triage view: one screen that answers "what is wrong, why, and what do I do".
 //
 //   verdict + platform strip   is the cluster itself healthy?

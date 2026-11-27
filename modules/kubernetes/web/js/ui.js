@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Troy Scafuro
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // DOM panels around the 3D view.
 import { esc, fmtAge, fmtBytes, fmtCpu, fmtMs, fmtNum, fmtPct, edgeMetric, LEVEL_COLOR, nsColor, optionsHtml, podLevel, visiblePods } from './format.js';
 

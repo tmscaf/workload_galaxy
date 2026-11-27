@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """The module's settings, declared once for the suite's Settings page (see galaxy_core.settings).
 
 `config.load_settings()` still reads the environment; what is saved from the Settings page is laid

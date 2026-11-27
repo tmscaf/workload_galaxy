@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Settings from the suite: the form, the token, and saving (which restarts the collector in place)."""
 import importlib
 import json

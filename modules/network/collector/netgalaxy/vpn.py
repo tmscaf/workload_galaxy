@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Who is connected to the router's VPN, and what the VPN server has been saying.
 
 Two feeds, both started by the router (the app never connects to it):

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """What a signal means and what to do about it.
 
 Pure text tables and message classifiers used by diagnose.py. Kept apart so the

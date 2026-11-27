@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Troy Scafuro
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Formatting and small shared helpers.
 
 export const LEVEL_COLOR = { ok: '#5ee6a8', warning: '#ffb547', critical: '#ff4d6d', evicted: '#6b7591' };

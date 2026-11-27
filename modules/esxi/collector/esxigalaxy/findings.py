@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """What looks wrong on the host, why it matters, and what to do about it.
 
 Each finding names one subject (a VM, a datastore, a port group, the host), says in plain words

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Workload Galaxy shell: the suite bar and module selector. Runs as non-root with a read-only root filesystem.
 #
 # Built from the repository root, because it uses the shared core package:

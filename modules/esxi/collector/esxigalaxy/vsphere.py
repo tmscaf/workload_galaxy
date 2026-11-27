@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Read one ESXi host (or a vCenter) through the vSphere API and return plain dicts.
 
 Read-only by construction: the only calls made are logins, property reads and performance queries,

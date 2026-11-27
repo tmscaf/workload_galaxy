@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """The shared core: settings, graph builders, scoping and the server-side tables."""
 from galaxy_core import nodes as N
 from galaxy_core.graphops import filter_graph, summarize

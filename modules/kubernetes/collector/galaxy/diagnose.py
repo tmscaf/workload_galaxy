@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Diagnostics: turn cluster state into findings a person can act on.
 
 The topology and risk modules answer "what is slow or down, and who does it
