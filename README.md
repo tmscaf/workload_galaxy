@@ -16,9 +16,9 @@ of them on a laptop with no cluster and no router ([Try it](#try-it)).
 
 | Module | Watches | Version | Docs |
 |---|---|---|---|
-| [Kubernetes](modules/kubernetes) | Kubernetes and OpenShift projects: workloads, pods, hosts, who calls whom, and where latency starts | 0.11.0 | [README](modules/kubernetes/README.md) · [changelog](modules/kubernetes/CHANGELOG.md) |
-| [Network](modules/network) | A home or small-office network behind a pfSense router: every device, what it talks to, what the firewall turns away, Wi-Fi and VPN | 0.2.0 | [README](modules/network/README.md) · [changelog](modules/network/CHANGELOG.md) |
-| [ESXi](modules/esxi) | A VMware ESXi host: virtual machines, the networks and datastores they hang off, capacity and right-sizing | 0.1.0 | [README](modules/esxi/README.md) · [changelog](modules/esxi/CHANGELOG.md) |
+| [Kubernetes](modules/kubernetes) | Kubernetes and OpenShift projects: workloads, pods, hosts, who calls whom, and where latency starts | 0.12.0 | [README](modules/kubernetes/README.md) · [changelog](modules/kubernetes/CHANGELOG.md) |
+| [Network](modules/network) | A home or small-office network behind a pfSense router: every device, what it talks to, what the firewall turns away, Wi-Fi and VPN | 0.3.0 | [README](modules/network/README.md) · [changelog](modules/network/CHANGELOG.md) |
+| [ESXi](modules/esxi) | A VMware ESXi host: virtual machines, the networks and datastores they hang off, capacity and right-sizing | 0.2.0 | [README](modules/esxi/README.md) · [changelog](modules/esxi/CHANGELOG.md) |
 
 Each module is a separate service with its own image, version and deployment. They share
 a design, a graph format and an API shape, described under [How it fits together](#how-it-fits-together).
@@ -259,17 +259,18 @@ Planned, not yet built:
 2. **A shared front end.** Each module carries its own copy of the 3D engine and panels; the
    common parts should move to `core/web`, with each module supplying its node kinds, tables
    and panels.
-3. **Switching modules on from the page.** The Settings page configures the modules the shell
-   is told about. Next: adding a module by URL and switching built-in ones on from the same
-   page, instead of listing them in the shell's own settings.
+3. **Adding modules from the page.** The Settings page configures the modules the shell is
+   told about, and turns each on or off. Next: adding a module by URL from the same page,
+   instead of listing it in the shell's own settings.
 4. **Links between modules.** The same machine is a VM on the ESXi map, a device on the
    network map and a node on the Kubernetes map; selecting it in one should lead to the others.
 5. **More modules.** Any source that can be drawn as nodes and connections.
 
 ## Contributing and security
 
-[CONTRIBUTING.md](CONTRIBUTING.md) says how to run each part, what a change needs, and the terms
-contributions come in under. Security problems are reported privately: see
+[CONTRIBUTING.md](CONTRIBUTING.md) says how to run each part and what a change needs.
+Contributions come in under a [Contributor Licence Agreement](CLA.md), signed once on your first
+pull request. Security problems are reported privately: see
 [SECURITY.md](SECURITY.md), which also sets out what the suite does and does not protect.
 
 ## Licence
@@ -282,3 +283,16 @@ modified version as a service for others, the licence asks you to offer them its
 
 Three.js, which the modules' front ends include, is under the MIT licence
 (`web/vendor/THREE-LICENSE` in each module).
+
+### Commercial licence
+
+If the AGPL's terms do not fit how you want to use Workload Galaxy (for example, building it
+into a product or a hosted service without publishing your changes), it can be licensed to you
+under separate commercial terms. To ask, open an issue titled "Commercial licence" saying only
+how to reach you, and you will be contacted.
+
+### Name
+
+"Workload Galaxy" and its logo are trademarks of Troy Scafuro. The licence covers the code, not
+the name: a modified version you distribute or host needs a name of its own that cannot be
+mistaken for this project.

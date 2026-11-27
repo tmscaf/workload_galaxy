@@ -53,17 +53,21 @@ every push and pull request.
 
 Workload Galaxy is licensed under the [GNU Affero General Public License v3.0](LICENSE).
 
-By submitting a contribution you agree that:
+Contributions come in under the [Contributor Licence Agreement](CLA.md). Its main points:
 
-1. it is your own work, or you have the right to submit it;
+1. the contribution is your own work, or you have the right to submit it;
 2. you keep your copyright in it;
-3. you license it to the project under AGPL-3.0, and you also give the project's maintainer the
+3. you license it to the project under AGPL-3.0, and you also give the project's owner the
    right to license it under other terms, including commercial ones.
 
 The third point is what lets the project be offered under a commercial licence to people who
 cannot use AGPL software, which is how its development is meant to be paid for. If you are not
 comfortable with it, open an issue describing the change instead and it can be written
 independently.
+
+You sign once, on your first pull request: a check asks you to post a one-line comment, and
+records your GitHub user name and the date. A pull request is merged only after everyone who
+wrote it has signed.
 
 ## Security problems
 
