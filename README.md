@@ -274,7 +274,7 @@ contributions come in under. Security problems are reported privately: see
 
 ## Licence
 
-Copyright (C) 2026 tmscaf.
+Copyright (C) 2026 Troy Scafuro.
 
 Workload Galaxy is free software: you can redistribute it and modify it under the terms of the
 [GNU Affero General Public License, version 3](LICENSE). It comes with no warranty. If you run a
