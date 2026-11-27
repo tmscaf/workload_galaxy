@@ -12,6 +12,9 @@ Suite bar 0.3.0.
   off leaves the drop-down and is no longer checked; it stays in Settings, where it can be set
   up and turned back on. `GALAXY_MODULES_OFF` sets which modules start off.
 - The suite bar's Kubernetes base now includes a small volume, where those choices are kept.
+- **A link back to the project.** The logo and name in the suite bar, and in each module's own
+  top bar, open the project's page on GitHub, where the source and the licence are. The container
+  images carry the same address and the licence as labels.
 
 ## 0.1.0
 

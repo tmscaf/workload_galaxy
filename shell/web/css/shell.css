@@ -33,6 +33,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
   height: 26px; user-select: none; }
 .brand svg { width: 24px; height: 24px; }
 .brand .title { font-weight: 650; font-size: 14px; letter-spacing: 0.01em; }
+a.brand { color: inherit; text-decoration: none; }
+a.brand:hover .title { color: var(--cyan); }
+a.brand:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .spacer { flex: 1; }
 
 .picker { position: relative; }
