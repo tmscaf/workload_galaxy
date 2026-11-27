@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Workload Galaxy - topology, traffic and latency-risk explorer for Kubernetes / OpenShift projects.
 
 Version comes from one place: the repo's VERSION file, baked into the image as GALAXY_VERSION

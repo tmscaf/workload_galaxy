@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Wi-Fi and connection health: where is the break?
 
 A Wi-Fi device reaches the internet over a chain of hops, and each hop fails in its own way:

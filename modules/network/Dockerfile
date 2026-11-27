@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Network Galaxy: API + UI in one image. Runs as non-root.
 #
 # Built from the repository root, because the module uses the shared core package:

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Workload Galaxy node agent (stdlib only).
 
 Runs as a DaemonSet with hostPID + privileged. Every GALAXY_AGENT_INTERVAL

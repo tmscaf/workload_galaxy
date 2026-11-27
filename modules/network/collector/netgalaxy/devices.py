@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """The device inventory: who is on the network, what each one is, and what is normal for it.
 
 A device is keyed by its MAC address when one is known (addresses move between devices on a

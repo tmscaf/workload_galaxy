@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Read-only client for a UniFi Network controller: access points, switches, and who is on Wi-Fi.
 
 It signs in with a controller account (a "View Only" admin is enough) and reads four things:

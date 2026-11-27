@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Workload Galaxy - the suite's front door: one bar across the top with the module selector, and
 the selected module underneath.
 

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # One private file on the cluster holds every secret the suite needs; this script turns it into the
 # Kubernetes Secrets the modules read. Nothing secret lives in the repository or on a laptop.
 #
@@ -168,5 +171,5 @@ case "${1:-}" in
   init) cmd_init ;;
   list) cmd_list ;;
   sync) shift; cmd_sync "${1:-}" ;;
-  *) sed -n '2,24p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' ; exit 2 ;;
+  *) sed -n '5,24p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' ; exit 2 ;;
 esac

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Troy Scafuro
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // DOM panels around the 3D view: top bar, left rail, tooltip and the detail drawer.
 //
 // Field names follow the graph format the map engine reads (namespace = device group, a node of

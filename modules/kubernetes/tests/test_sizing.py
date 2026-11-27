@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Sizing advice: a resource-constraint finding must come with concrete, checked ways to fix it."""
 import time
 

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Large estates: the page gets a picture one screen can show, and small ones are left alone."""
 import json
 

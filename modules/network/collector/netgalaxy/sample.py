@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """A made-up network for trying the app without a router (NETGALAXY_MODE=sample) and for the tests.
 
 It answers the same questions as the live sources, in the same shapes: ntopng's host and flow lists,

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """A made-up ESXi host for trying the module without one (ESXIGALAXY_MODE=sample) and for the tests.
 
 `SampleHost.snapshot()` returns the same shape as `vsphere.Vsphere.snapshot()`, with one of each

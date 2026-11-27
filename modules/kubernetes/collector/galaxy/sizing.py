@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Right-sizing advice: concrete ways to fix a workload that is the wrong size.
 
 diagnose.py says *what* is wrong ("OOMKilled", "no node has enough unreserved memory", "the project

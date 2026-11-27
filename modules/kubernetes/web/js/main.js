@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Troy Scafuro
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Wiring: data polling, URL state, selection, and the embedding API.
 //
 // URL parameters (all optional):

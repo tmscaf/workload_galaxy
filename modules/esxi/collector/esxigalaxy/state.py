@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """The module's refresh loop: read the host, remember, build the graph."""
 from __future__ import annotations
 

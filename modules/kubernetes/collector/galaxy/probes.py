@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Optional active TCP connect probes (GALAXY_PROBES=true, in-cluster only).
 
 Measures connect time to each Service VIP and to a few ready endpoints behind

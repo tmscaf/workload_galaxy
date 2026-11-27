@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Infer upstream -> downstream dependencies from workload configuration.
 
 Scans container env, args/command and referenced ConfigMaps for hostnames that

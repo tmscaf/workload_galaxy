@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Latency / availability risk scoring.
 
 Each node and edge gets an *own* score from signals that point at it directly

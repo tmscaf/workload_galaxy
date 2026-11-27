@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """HTTP API + static UI.
 
     GET /api/v1/meta          what data sources are live

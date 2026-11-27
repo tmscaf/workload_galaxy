@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """The HTTP API and UI serving every module exposes.
 
     GET /api/v1/meta          what is running and which data sources are live

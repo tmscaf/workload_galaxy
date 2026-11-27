@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """The background refresh loop and the caches every request reads from.
 
 A module subclasses `State` and implements `build()`: read its source, return the full graph. The

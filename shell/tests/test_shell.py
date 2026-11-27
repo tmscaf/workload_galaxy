@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """The suite shell: which modules it lists, how it reports their state, and what it serves."""
 import urllib.error
 

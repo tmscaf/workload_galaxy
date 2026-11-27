@@ -1,4 +1,6 @@
 <?php
+// Copyright (C) 2026 Troy Scafuro
+// SPDX-License-Identifier: AGPL-3.0-only
 /*
  * Network Galaxy block-list sync for pfSense. Runs from cron every minute as root.
  *

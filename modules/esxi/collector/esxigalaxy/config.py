@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """The module's settings, declared once (see galaxy_core.settings) and its manifest."""
 from __future__ import annotations
 

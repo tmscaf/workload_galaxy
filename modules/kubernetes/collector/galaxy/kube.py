@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Read-only access to the Kubernetes / OpenShift API.
 
 Everything is fetched as plain JSON dicts so the topology builder can be tested

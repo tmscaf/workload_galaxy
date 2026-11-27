@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Troy Scafuro
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Deterministic layouts for both views. Same input -> same positions, so
 // live refreshes only move what actually changed.
 import { hash01, visiblePods } from './format.js';

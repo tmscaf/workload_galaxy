@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """ESXi Galaxy's HTTP app: the shared API (see galaxy_core.webapp) plus what is this module's own.
 
     GET /api/v1/estate        host-wide totals: capacity, what is allocated, busiest VMs, datastores

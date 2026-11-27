@@ -270,7 +270,8 @@ Planned, not yet built:
 
 [CONTRIBUTING.md](CONTRIBUTING.md) says how to run each part and what a change needs.
 Contributions come in under a [Contributor Licence Agreement](CLA.md), signed once on your first
-pull request. Security problems are reported privately: see
+pull request, and everyone taking part is expected to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md). Security problems are reported privately: see
 [SECURITY.md](SECURITY.md), which also sets out what the suite does and does not protect.
 
 ## Licence
@@ -278,7 +279,8 @@ pull request. Security problems are reported privately: see
 Copyright (C) 2026 Troy Scafuro.
 
 Workload Galaxy is free software: you can redistribute it and modify it under the terms of the
-[GNU Affero General Public License, version 3](LICENSE). It comes with no warranty. If you run a
+[GNU Affero General Public License, version 3](LICENSE) (`AGPL-3.0-only`; each source file says
+so in its first lines). It comes with no warranty. If you run a
 modified version as a service for others, the licence asks you to offer them its source.
 
 Three.js, which the modules' front ends include, is under the MIT licence

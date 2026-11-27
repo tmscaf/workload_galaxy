@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Turn one reading of the network into the graph the front end draws.
 
 The graph has the same shape as Workload Galaxy's, so the same 3D engine, search and tables work:

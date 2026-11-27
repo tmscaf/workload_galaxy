@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """A password for actions. Viewing stays open on the LAN; blocking and unblocking need a session.
 
 The session is a signed cookie (HMAC over expiry), HttpOnly and SameSite=Strict, and every action

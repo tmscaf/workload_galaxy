@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """The settings API a module offers the suite, and two ways to apply what is saved.
 
     GET /api/v1/settings        the form: fields, current values, where each value comes from

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """The collector end to end on the sample network, plus the parsers and the inventory on their own."""
 import json
 import time

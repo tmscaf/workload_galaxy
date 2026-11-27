@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Ask each module how it is doing, in the background, so the selector can show it at a glance.
 
 The shell's server does the asking, not the browser: modules live on other addresses, and a page

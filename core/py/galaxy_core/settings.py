@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """A module's settings, declared once.
 
 Each module lists its settings as `Field`s. From that one list come:

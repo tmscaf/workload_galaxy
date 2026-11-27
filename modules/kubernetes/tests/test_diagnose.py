@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Diagnostics: each failure must surface as a finding that names the cause and the next step."""
 from galaxy.demo import DemoSource
 from galaxy.scenarios import SCENARIOS

@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Latency and loss to the places that matter, measured all the time.
 
 One background thread sends ICMP echo requests ("pings") from where the app runs (a wired machine on

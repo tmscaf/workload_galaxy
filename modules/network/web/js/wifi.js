@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Troy Scafuro
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // The Wi-Fi panel: where does a connection break?
 //
 // Data: GET api/v1/wifi (the path every device shares, access points, Wi-Fi devices, events) and

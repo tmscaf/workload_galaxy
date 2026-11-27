@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Settings from the suite: the form, the token, saving (which restarts the module) and the saved site details."""
 import importlib
 import json

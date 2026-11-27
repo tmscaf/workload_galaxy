@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Troy Scafuro
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Receive the router's remote syslog (UDP) and keep what matters from it.
 
 Three kinds of line are understood:
