@@ -6,12 +6,14 @@ The suite as a whole. Each part keeps its own, with the detail:
 
 ## Unreleased
 
-Suite bar 0.3.0, Network module 0.4.0.
+Suite bar 0.3.0, Network module 0.5.0.
 
 - **Plugins.** A module can carry optional add-ons, each with its own switch and settings in
   Settings. The shared core has the frame; the Network module has the first one, an **ad
   blocker** that publishes one list of ad and tracker names for the router's DNS blocking to
   pull. See the [Network module's README](modules/network/README.md#plugins).
+- **Defences on the Network map.** DNS blocking, the firewall and your block list are drawn as
+  points, on a plane of their own in Strata, with a dashed line for whatever was stopped at each.
 - **Modules can be turned on and off from Settings.** Each module has a switch. A module that is
   off leaves the drop-down and is no longer checked; it stays in Settings, where it can be set
   up and turned back on. `GALAXY_MODULES_OFF` sets which modules start off.

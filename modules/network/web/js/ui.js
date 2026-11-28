@@ -412,6 +412,8 @@ export class UI {
         html += `<div class="t2">${esc(deviceType(n))} · ${esc(this.groupTitle(n.namespace))}${n.ghost ? ' · outside the groups shown' : ''}</div>`;
         html += isOffline(n) ? `<div class="t2">offline${d.lastSeenS != null ? ` · last seen ${esc(fmtAgo(d.lastSeenS))}` : ''}${d.ip ? ` · was ${esc(d.ip)}` : ''}</div>`
           : `<div class="t2">${esc(d.ip || 'no address')} · ↓ ${esc(fmtBits(d.downBps || 0))} · ↑ ${esc(fmtBits(d.upBps || 0))}</div>`;
+      } else if (n.kind === 'external' && n.scope === 'defence') {
+        html += `<div class="t2">Defence</div><div class="t2">${esc(n.defence?.summary || '')}</div>`;
       } else if (n.kind === 'external') {
         const x = n.ext || {};
         const users = this.graph.edges.filter((e) => e.target === n.id).length;
@@ -482,6 +484,8 @@ export class UI {
       this.ctx.copy(el.dataset.copy); el.textContent = 'copied'; setTimeout(() => { el.textContent = 'copy'; }, 1200);
     }));
     d.querySelectorAll('[data-node]').forEach((el) => el.addEventListener('click', () => this.ctx.onSelect({ type: 'node', id: el.dataset.node }, true)));
+    d.querySelectorAll('[data-goto-section]').forEach((el) => el.addEventListener('click', () => this.ctx.onSection?.(el.dataset.gotoSection)));
+    d.querySelectorAll('[data-goto-blocks]').forEach((el) => el.addEventListener('click', () => this.ctx.onBlocks?.()));
     d.querySelectorAll('[data-goto-vpn]').forEach((el) => el.addEventListener('click', () => this.ctx.onSection?.('vpn')));
     d.querySelectorAll('[data-goto-wifi]').forEach((el) => el.addEventListener('click', () => this.ctx.onWifi?.(el.dataset.gotoWifi || null)));
     d.querySelectorAll('[data-edge]').forEach((el) => el.addEventListener('click', () => this.ctx.onSelect({ type: 'edge', id: el.dataset.edge }, false)));
@@ -536,12 +540,12 @@ export class UI {
       const lvl = e.risk?.level || 'ok';
       const rate = edgeRate(e);
       const blocked = other?.kind === 'external' && (other.ext?.allBlocked || (other.ext?.blocked || []).length);
-      const where = !other ? '' : blocked ? 'blocked' : other.kind === 'external' ? 'internet' : other.kind === 'clients' ? 'port forward' : other.kind === 'workload' ? this.groupTitle(other.namespace) : kindWord(other.subkind);
-      const bits = [e.traffic?.connections ? plural(e.traffic.connections, 'connection') : '', (e.ports || []).slice(0, 3).join(', '), (e.net?.apps || []).filter((a) => a !== name).slice(0, 2).join(', ')].filter(Boolean);
+      const where = !other ? '' : blocked ? 'blocked' : other.scope === 'defence' ? 'defence' : other.kind === 'external' ? 'internet' : other.kind === 'clients' ? 'port forward' : other.kind === 'workload' ? this.groupTitle(other.namespace) : kindWord(other.subkind);
+      const bits = e.blocked ? [] : [e.traffic?.connections ? plural(e.traffic.connections, 'connection') : '', (e.ports || []).slice(0, 3).join(', '), (e.net?.apps || []).filter((a) => a !== name).slice(0, 2).join(', ')].filter(Boolean);
       return `<li data-edge="${esc(e.id)}"><div class="p1"><span class="st" style="background:${LEVEL_COLOR[lvl]}"></span>
         <span class="arrow" title="${outgoing ? 'this one opened the connection' : 'the other side opened the connection'}">${outgoing ? '→' : '←'}</span>
         <span class="nm">${esc(name)}</span><span class="where${blocked ? ' blk-t' : ''}">${blocked ? '⛔ ' : ''}${esc(where)}</span>
-        <span class="rate">${esc(rate || (e.type === 'exposes' ? 'no traffic seen' : 'quiet'))}</span></div>
+        <span class="rate">${esc(e.blocked ? `${fmtNum(e.stopped || 0)} stopped` : rate || (e.type === 'exposes' ? 'no traffic seen' : 'quiet'))}</span></div>
         ${bits.length ? `<div class="p2">${esc(bits.join(' · '))}</div>` : ''}</li>`;
     }).join('')}</ul>`;
   }
@@ -567,10 +571,62 @@ export class UI {
   _nodeHtml(n, byId) {
     if (n.aggregate && n.kind === 'workload') return this._aggregateHtml(n);
     if (n.kind === 'workload') return this._deviceHtml(n, byId);
+    if (n.kind === 'external' && n.scope === 'defence') return this._defenceHtml(n, byId);
     if (n.kind === 'external') return this._externalHtml(n, byId);
     if (n.kind === 'clients') return this._inboundHtml(n, byId);
     if (n.kind === 'host') return this._hostHtml(n, byId);
     return `<div class="d-kind">${esc(kindWord(n.subkind || n.kind))}</div><div class="d-title">${esc(n.name)}</div>${this._diagnosis(n.id)}`;
+  }
+
+  // ---- a defence: DNS blocking, the firewall, your block list
+  _defenceHtml(n, byId) {
+    const d = n.defence || {};
+    const lines = this.graph.edges.filter((e) => e.target === n.id && e.blocked).sort((a, b) => (b.stopped || 0) - (a.stopped || 0));
+    const rows = (list, word) => `<ul class="peers">${list.map((e) => {
+      const o = byId.get(e.source);
+      return `<li data-node="${esc(e.source)}"><div class="p1"><span class="st" style="background:#b06a78"></span>
+        <span class="nm">${esc(o ? this.nodeName(o) : e.source)}</span><span class="where">${esc(o?.device?.ip || '')}</span>
+        <span class="rate">${fmtNum(e.stopped || 0)} ${word}</span></div></li>`;
+    }).join('')}</ul>`;
+    const why = String(n.scopeWhy || '');
+    let html = `<div class="d-kind">Defence</div><div class="d-title">${esc(n.name)}</div>
+      <div class="d-sub">${esc(why.charAt(0).toUpperCase() + why.slice(1))}.</div>`;
+    if (d.type === 'dns') {
+      html += this._badge('ok', d.total ? `${fmtNum(d.total)} blocked ${d.total === 1 ? 'connection' : 'connections'} now` : 'Nothing is being blocked right now');
+      html += `<div class="d-sec"><h3>Devices being blocked now</h3>${lines.length ? rows(lines, 'blocked')
+        : '<div class="empty">No device is connecting to the block page right now.</div>'}
+        <div class="d-sub">Counted from connections to the block page, so which names were asked for is not shown here.</div></div>`;
+      if (d.adblock) {
+        html += `<div class="d-sec"><h3>Ad blocker</h3><div class="d-sub">${d.adblock.ready ? `${fmtNum(d.adblock.names)} names are being published for the router to block.`
+          : 'Its list is still being put together.'}</div><button class="btn" data-goto-section="plugin:adblock">Open the Ad blocker ▸</button></div>`;
+      }
+    } else if (d.type === 'firewall') {
+      const out = lines.filter((e) => e.source !== 'clients');
+      html += this._badge('ok', d.blockedIn ? `${fmtNum(d.blockedIn)} turned away in the last ${d.windowMinutes} min` : `Nothing turned away in the last ${d.windowMinutes} min`);
+      html += `<div class="d-sec"><h3>At the door</h3><dl class="kv">
+        <dt>Turned away</dt><dd>${fmtNum(d.blockedIn || 0)} attempt${d.blockedIn === 1 ? '' : 's'} from outside <span class="dim">· ${plural(d.sources || 0, 'source')}</span></dd>
+        <dt>On a known-bad list</dt><dd>${d.knownBad ? `<span class="w">${fmtNum(d.knownBad)}</span> <span class="dim">· ${plural(d.knownBadSources || 0, 'source')}</span>` : 'none'}</dd>
+        <dt>Refused going out</dt><dd>${d.blockedOut ? `<span class="w">${fmtNum(d.blockedOut)}</span>` : 'none'}</dd></dl>
+        <div class="d-sub">Outside addresses are not on the map, so what they sent shows as one count${byId.has('clients') ? ' and one line from the internet' : ''}.</div></div>`;
+      if (out.length) html += `<div class="d-sec"><h3>Devices refused on the way out</h3>${rows(out, 'refused')}</div>`;
+      if ((d.topSources || []).length) {
+        html += `<div class="d-sec"><h3>Knocking most</h3><ul class="details">${d.topSources.map((s) => `<li><span class="mono">${esc(s.ip)}</span>
+          <span class="dim">· ${plural(s.count, 'attempt')}${s.knownBad ? ' · on a known-bad list' : ''}</span></li>`).join('')}</ul></div>`;
+      }
+      html += '<div class="d-sec"><button class="btn" data-node="host:router">Details on the router ▸</button></div>';
+    } else if (d.type === 'blocks') {
+      html += this._badge('ok', `${plural(d.entries || 0, 'address', 'addresses')} blocked by you`);
+      html += `<div class="d-sec"><h3>The list</h3><dl class="kv">
+        <dt>Addresses and ranges</dt><dd>${fmtNum(d.entries || 0)}</dd>
+        <dt>Applied on the router</dt><dd>${d.applied === d.entries ? 'all of them' : `<span class="w">${fmtNum(d.applied || 0)} of ${fmtNum(d.entries || 0)}</span> <span class="dim">· the rest at the router's next fetch</span>`}</dd></dl></div>`;
+      if ((d.services || []).length) {
+        html += `<div class="d-sec"><h3>Blocked services on the map</h3><ul class="peers">${d.services.map((s) => `<li data-node="${esc(s.id)}"><div class="p1">
+          <span class="st" style="background:#b06a78"></span><span class="nm">${esc(s.name)}</span><span class="where blk-t">⛔ blocked</span></div></li>`).join('')}</ul>
+          <div class="d-sub">Still on the map because a device is still trying to reach it.</div></div>`;
+      }
+      html += '<div class="d-sec"><button class="btn" data-goto-blocks>Manage the block list ▸</button></div>';
+    }
+    return html;
   }
 
   // ---- a device
@@ -839,6 +895,14 @@ export class UI {
     const seen = (e.evidence || []).includes('observed');
     const lvl = e.risk?.level || 'ok';
     const rate = edgeRate(e);
+    if (e.blocked) {
+      const side = (id, n, word) => `<li data-node="${esc(id)}"><div class="p1"><span class="arrow">${word}</span><span class="nm">${esc(this.nodeName(n) || id)}</span></div></li>`;
+      return `<div class="d-kind">Stopped</div><div class="d-title">${esc(this.nodeName(s) || e.source)} → ${esc(this.nodeName(t) || e.target)}</div>
+        <div class="d-sub">Stopped at ${esc(this.nodeName(t) || 'a defence')}. This line counts what was stopped; none of it got through.</div>
+        <div class="d-sec"><h3>What was stopped</h3><dl class="kv"><dt>Count</dt><dd>${fmtNum(e.stopped || 0)}</dd></dl>
+        ${(e.details || []).length ? `<ul class="details" style="margin-top:8px">${e.details.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</div>
+        <div class="d-sec"><ul class="peers">${side(e.source, s, 'from')}${side(e.target, t, 'stopped at')}</ul></div>`;
+    }
     let html = `<div class="d-kind">${forward ? 'Port forward' : 'Connection'}</div>
       <div class="d-title">${esc(this.nodeName(s) || e.source)} → ${esc(this.nodeName(t) || e.target)}</div>
       <div class="d-sub">${forward ? (seen ? 'Open to the internet, and in use right now.' : 'Open to the internet. Nobody is using it right now.')
