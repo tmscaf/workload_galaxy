@@ -110,7 +110,7 @@ def test_no_more_names_than_the_router_was_sized_for():
     p = _plugin(None, fetch=lambda url: page, lists="https://a.example/big", block="mine.example.org", max_names=10)
     p.refresh(now=p.started + 1)
     names = p.feed(now=p.started + 1)[0].split()
-    assert len(names) == 10 and "mine.example.org" in names                          # your own names are never the ones cut
+    assert len(names) == 10 and names.count("mine.example.org") == 1                 # your own names are never the ones cut
     assert _findings(p, now=p.started + 1)["adblock-full"]["title"] == "The block list is full: 41 names left out"
 
 
@@ -187,7 +187,9 @@ def test_the_feed_is_for_the_router_only(settings, state, monkeypatch):
         feed = client.get("/api/v1/plugins/adblock/feed?token=tok123")
         assert feed.status_code == 200 and feed.headers["content-type"].startswith("text/plain")
         names = feed.text.split()
-        assert "ads.example.net" in names and not any(n.endswith("example.org") for n in names)
+        # Everything in the sample lists except what "never block example.org" covers.
+        assert set(names) == {"ads.example.net", "banners.example.net", "beacon.example.net", "metrics.shop.example.com",
+                              "pixel.adnetwork.example.com", "static.adnetwork.example.com", "telemetry.tv.example.com"}
         page = client.get("/api/v1/plugins/adblock").json()
         assert page["count"] == len(names) and page["hash"] == feed.headers["X-Feed-Hash"]
         assert page["router"]["from"] == "testclient" and page["router"]["current"] is True and page["router"]["lastPullS"] < 5
