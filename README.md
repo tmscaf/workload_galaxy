@@ -17,7 +17,7 @@ of them on a laptop with no cluster and no router ([Try it](#try-it)).
 | Module | Watches | Version | Docs |
 |---|---|---|---|
 | [Kubernetes](modules/kubernetes) | Kubernetes and OpenShift projects: workloads, pods, hosts, who calls whom, and where latency starts | 0.12.0 | [README](modules/kubernetes/README.md) · [changelog](modules/kubernetes/CHANGELOG.md) |
-| [Network](modules/network) | A home or small-office network behind a pfSense router: every device, what it talks to, what the firewall turns away, Wi-Fi and VPN | 0.4.0 | [README](modules/network/README.md) · [changelog](modules/network/CHANGELOG.md) |
+| [Network](modules/network) | A home or small-office network behind a pfSense router: every device, what it talks to, what the firewall turns away, Wi-Fi and VPN | 0.5.0 | [README](modules/network/README.md) · [changelog](modules/network/CHANGELOG.md) |
 | [ESXi](modules/esxi) | A VMware ESXi host: virtual machines, the networks and datastores they hang off, capacity and right-sizing | 0.2.0 | [README](modules/esxi/README.md) · [changelog](modules/esxi/CHANGELOG.md) |
 
 Each module is a separate service with its own image, version and deployment. They share
@@ -95,6 +95,11 @@ point's channel load, and every wireless device's signal and drops. A **VPN** ta
 who is connected and failed logins.
 
 ![Wi-Fi: the shared path, access points and per-device signal](docs/screenshots/network-wifi.png)
+
+What stands in between is on the map as well: DNS blocking, the firewall and your own block list
+have a **Defences** plane in the Strata view, and whatever was stopped at one is a dashed line to it.
+
+![The Defences plane, with DNS blocking selected](docs/screenshots/network-defences.png)
 
 An optional **Ad blocker** plugin publishes one list of ad and tracker names, built from the
 block lists you choose, for the router's DNS blocking to pull.

@@ -432,8 +432,8 @@ class Index:
         if self._calls is None:
             rows = []
             for e in self.graph["edges"]:
-                if e["type"] == "exposes":
-                    continue
+                if e["type"] == "exposes" or e.get("blocked"):
+                    continue                                  # a port forward, or something stopped at a defence: not a connection
                 s, t = self.nodes.get(e["source"], {}), self.nodes.get(e["target"], {})
                 f = next((x for x in self.findings[e["id"]] if x["severity"] != "info"), None)
                 seen = "observed" in e["evidence"] or "mesh" in e["evidence"]

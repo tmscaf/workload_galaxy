@@ -28,7 +28,7 @@ from .config import Settings
 from .devices import GROUPS, GROUP_TITLES, Inventory
 from .findings import Diagnoser
 from .graphops import summarize
-from .util import iso_now, level_for, noisy_or, rate, slug, traffic_level
+from .util import iso_now, level_for, noisy_or, plural, rate, slug, traffic_level
 
 # Protocol labels that say how, not who: never used as a service name.
 GENERIC_L7 = {
@@ -138,6 +138,7 @@ class Builder:
         self._hosts()
         self._flows()
         self._forwards()
+        self._defences()
         diag = Diagnoser(self)
         diag.run()
         self._score()
@@ -441,6 +442,77 @@ class Builder:
                 "scopeWhy": "anyone on the internet opening a connection through one of your port forwards",
                 "risk": _risk(), "ghost": False}
 
+    # ------------------------------------------------------------------ defences
+    def _defences(self) -> None:
+        """What stands between your devices and the internet, as points on the map: DNS blocking,
+        the firewall, and your own block list. Each is there only when the module has data for it.
+
+        A line to one of them is something that was stopped there, never traffic that got through:
+        it carries a count of what was stopped, and no rate."""
+        def point(key: str, name: str, why: str, summary: str, **facts) -> str:
+            nid = f"def:{key}"
+            self.nodes[nid] = {
+                "id": nid, "kind": "external", "subkind": "Defence", "name": name, "namespace": "", "addresses": [],
+                "scope": "defence", "scopeWhy": why, "risk": _risk(), "ghost": False,
+                "ext": {"services": 1, "addressCount": 0, "names": [], "apps": [], "blacklisted": False, "bytesPerSec": 0.0,
+                        "bytes": 0, "members": [], "blockTargets": [], "blocked": [], "allBlocked": False},
+                "defence": {"type": key, "summary": summary, **facts}}
+            return nid
+
+        def stopped(src: str, nid: str, count: int, detail: str) -> None:
+            if src not in self.nodes or count <= 0:
+                return
+            e = self._edge(src, nid, "stopped")
+            if "observed" not in e["evidence"]:
+                e["evidence"].append("observed")
+            e["blocked"] = True
+            e["stopped"] = e.get("stopped", 0) + count
+            e["details"].append(detail)
+
+        # DNS blocking: devices that asked for a name on a block list and were sent to the block page.
+        if self.sinkhole:
+            hits = {dev: n for dev, n in self.sinkhole_hits.items() if dev in self.nodes and n > 0}
+            total = sum(hits.values())
+            adblock = (self.sources.get("plugins") or {}).get("adblock")
+            nid = point("dns", "DNS blocking", "names on a block list are answered with the block page instead of the real address",
+                        f"{total} blocked now" if total else "nothing blocked now", total=total, devices=len(hits),
+                        adblock={"names": adblock.get("names", 0), "ready": bool(adblock.get("ready"))} if adblock else None)
+            for dev, n in hits.items():
+                stopped(dev, nid, n, f"{plural(n, 'connection')} to the block page right now: names this device asked for that are "
+                                     "on the block list.")
+
+        # The firewall: what it turned away at the door, and what it refused on the way out.
+        ev = self.events
+        if ev:
+            window = max(1, round((ev.get("windowSeconds") or 3600) / 60))
+            turned = ev.get("blockedIn", 0)
+            nid = point("firewall", "Firewall", "what the router's firewall turned away, from its log",
+                        f"{turned} turned away" if turned else "nothing turned away", windowMinutes=window, blockedIn=turned,
+                        sources=ev.get("blockedInSources", 0), knownBad=ev.get("blockedInKnownBad", 0),
+                        knownBadSources=ev.get("knownBadSources", 0), blockedOut=ev.get("blockedOut", 0),
+                        topSources=(ev.get("topSources") or [])[:8], topPorts=(ev.get("topPorts") or [])[:6])
+            stopped("clients", nid, turned, f"{plural(turned, 'connection attempt')} from {plural(ev.get('blockedInSources', 0), 'outside address', 'outside addresses')} "
+                                            f"turned away in the last {window} min.")
+            refused: Counter = Counter()
+            for pair in ev.get("blockedOutPairs") or []:
+                dev = self.dev_by_ip.get(pair.get("src", ""))
+                if dev:
+                    refused[dev] += pair.get("count", 0)
+            for dev, n in refused.items():
+                stopped(dev, nid, n, f"{plural(n, 'attempt')} to reach something the firewall's rules forbid, in the last {window} min.")
+
+        # Your block list: addresses you chose to block. Services on the map that it covers hang off it.
+        if self.blocks:
+            entries = list(self.blocks.values())
+            applied = sum(1 for b in entries if b.get("appliedAt"))
+            covered = [n for n in self.nodes.values() if n["kind"] == "external" and n.get("scope") == "internet" and n["ext"]["blocked"]]
+            nid = point("blocks", "Your block list", "addresses you chose to block; the router pulls the list and drops them both ways",
+                        plural(len(entries), "address", "addresses") + " blocked", entries=len(entries), applied=applied,
+                        services=[{"id": n["id"], "name": n["name"]} for n in covered[:12]])
+            for n in covered:
+                stopped(n["id"], nid, len(n["ext"]["blocked"]), f"{plural(len(n['ext']['blocked']), 'address', 'addresses')} of {n['name']} "
+                                                                "on your block list.")
+
     # ------------------------------------------------------------------ scoring and assembly
     def _score(self) -> None:
         for obj in list(self.nodes.values()) + list(self.edges.values()):
@@ -519,13 +591,14 @@ class Builder:
         devices = [n for n in nodes if n["kind"] == "workload" and not n.get("vpn")]     # VPN sessions are counted apart
         online = [n for n in devices if n["device"]["present"]]
         talkers = sorted(online, key=lambda n: -(n["device"]["upBps"] + n["device"]["downBps"]))[:8]
-        services = sorted((n for n in nodes if n["kind"] == "external"), key=lambda n: -n["ext"]["bytesPerSec"])[:8]
+        internet = [n for n in nodes if n["kind"] == "external" and n.get("scope") != "defence"]      # a defence is not a service
+        services = sorted(internet, key=lambda n: -n["ext"]["bytesPerSec"])[:8]
         network = {
             "name": self.s.network_name, "devices": len(devices), "online": len(online), "offline": len(devices) - len(online),
             "throughputBps": round(iface.get("throughput_bps") or 0),
             "uploadBps": sum(n["device"]["upBps"] for n in online), "downloadBps": sum(n["device"]["downBps"] for n in online),
             "flows": iface.get("num_flows", 0), "remoteHosts": max(0, (iface.get("num_hosts") or 0) - (iface.get("num_local_hosts") or 0)),
-            "services": sum(1 for n in nodes if n["kind"] == "external"), "forwards": len(self.forwards),
+            "services": len(internet), "forwards": len(self.forwards),
             "learning": self.inv.learning,
             "vpn": {"connected": self.vpn.get("connected", 0), "failed24h": self.vpn.get("failed24h", 0),
                     "probes24h": self.vpn.get("probes24h", 0)} if self.vpn else None,

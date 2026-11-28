@@ -21,6 +21,7 @@ const C = {
 // The strata planes, top to bottom. Keys are the engine's; labels are what they mean on a network.
 export const LAYERS = [
   { key: 'users', label: 'The internet', color: '#ffd75e' },
+  { key: 'defences', label: 'Defences', color: '#f47fb6' },
   { key: 'services', label: 'Devices', color: '#4f7dff' },
   { key: 'pods', label: 'Addresses in use', color: '#8b5cf6' },
   { key: 'hosts', label: 'Router & hosts', color: '#19c9a0' },
@@ -31,7 +32,10 @@ const TAIL = 4;            // points per comet (head + tail)
 const DROP_SEG = 10;
 
 const VIEWS = ['galaxy', 'strata'];
-const scopeColor = (scope) => (scope === 'lan' ? C.lan : scope === 'cluster' ? C.clusterExt : C.internet);
+const scopeColor = (scope) => (scope === 'lan' ? C.lan : scope === 'cluster' ? C.clusterExt : scope === 'defence' ? C.defence : C.internet);
+C.defence = new THREE.Color('#f47fb6');
+C.stopped = C.crit.clone().lerp(C.idle, 0.3);        // a line to a defence: something that was stopped there
+const isDefence = (n) => n.kind === 'external' && n.scope === 'defence';
 const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
 const PARTICLE_VS = `
@@ -282,14 +286,16 @@ export class GalaxyScene {
     this.edges = graph.edges.filter((e) => this.nodes.has(e.source) && this.nodes.has(e.target)).map((e) => {
       // A port forward that is set up but has carried no traffic: drawn dashed, with a single slow pulse.
       const inferredOnly = !(e.evidence || []).includes('observed');
-      const idle = !!e.traffic?.idle;   // connection open but quiet
+      // Something stopped at a defence: drawn dashed in grey-red, stronger the more was stopped. It is not traffic.
+      const stopped = !!e.blocked;
+      const idle = !stopped && !!e.traffic?.idle;   // connection open but quiet
       const lvl = e.risk?.level || 'ok';
-      const level = idle ? 0 : e.traffic?.level || 0;   // 0..1, traffic volume
-      const count = inferredOnly || idle ? 1 : Math.round(2 + 9 * level);
+      const level = stopped ? Math.min(1, Math.log10(1 + (e.stopped || 0)) / 2.6) : idle ? 0 : e.traffic?.level || 0;   // 0..1
+      const count = stopped ? 1 + Math.round(2 * level) : inferredOnly || idle ? 1 : Math.round(2 + 9 * level);
       const phases = prevPhase.get(e.id) && prevPhase.get(e.id).length === count ? prevPhase.get(e.id)
         : Array.from({ length: count }, (_, k) => (k + hash01(e.id)) / count);
       return {
-        data: e, inferredOnly, idle, lvl, level, count, phases,
+        data: e, inferredOnly, stopped, idle, lvl, level, count, phases,
         extScope: byId.get(e.target)?.kind === 'external' ? (byId.get(e.target).scope || 'internet') : null,
         inScope: byId.get(e.source)?.kind === 'clients' && byId.get(e.source).scope === 'lan' ? 'lan' : null,
         p0: new THREE.Vector3(), p1: new THREE.Vector3(), p2: new THREE.Vector3(), len: 1,
@@ -336,7 +342,7 @@ export class GalaxyScene {
       obj.glow.scale.set(26, 26, 1);
       group.add(obj.wire, obj.pick, obj.glow);
     } else {
-      const map = { clients: TX.cloud(), entry: TX.diamond(), external: TX.hexOutline(), service: TX.ring() }[n.kind];
+      const map = isDefence(n) ? TX.diamond() : { clients: TX.cloud(), entry: TX.diamond(), external: TX.hexOutline(), service: TX.ring() }[n.kind];
       obj.glow = mk(TX.glow());
       obj.core = mk(map || TX.star());
       obj.halo = mk(TX.dashedRing());
@@ -380,6 +386,7 @@ export class GalaxyScene {
       // Blocked by you: greyed with a hint of red, dimmed (its connections should die away).
       if (blocked) color = C.idle.clone().lerp(C.crit, 0.35);
       size = Math.min(17, 10 + 1.6 * Math.log10(1 + ((n.ext?.bytesPerSec || 0) * 8) / 2000));
+      if (isDefence(n)) size = 15;
     }
     else if (n.kind === 'service') { color = C.inferred.clone(); size = 11; }
     else { color = lvlColor ? lvlColor.clone() : C.hostOk.clone(); size = 14; }
@@ -412,7 +419,8 @@ export class GalaxyScene {
     } else if (n.kind === 'clients') {
       const fw = (this.graph?.edges || []).filter((e) => e.source === n.id && e.type === 'exposes').length;
       metric = fw ? plural(fw, 'port forward') : '';
-    } else metric = nodeMetric(n);
+    } else if (isDefence(n)) metric = n.defence?.summary || '';
+    else metric = nodeMetric(n);
     if (blocked) metric = [n.ext.allBlocked ? 'blocked' : 'partly blocked', metric].filter(Boolean).join(' · ');
     const lanUsers = n.kind === 'clients' && n.scope === 'lan';
     obj.label.element.className = `lbl ${offline ? 'offline' : lvl}${blocked ? ' blocked' : ''}${n.ghost ? ' ghost' : ''}${n.kind === 'external' ? ` ext-${n.scope || 'internet'}` : lanUsers ? ' ext-lan' : ''}`;
@@ -565,7 +573,7 @@ export class GalaxyScene {
   // An offline device is counted as offline, never as a problem.
   layerCounts() {
     const mk = () => ({ shown: 0, warning: 0, critical: 0, text: '' });
-    const out = { users: mk(), services: mk(), pods: mk(), hosts: mk() };
+    const out = { users: mk(), defences: mk(), services: mk(), pods: mk(), hosts: mk() };
     const bump = (k, lvl) => {
       out[k].shown++;
       if (lvl === 'warning' || lvl === 'critical') out[k][lvl]++;
@@ -573,6 +581,7 @@ export class GalaxyScene {
     let services = 0, inbound = 0, offline = 0, groups = 0;
     for (const n of this.graph?.nodes || []) {
       if (n.kind === 'clients') { inbound++; bump('users', n.risk?.level); }
+      else if (isDefence(n)) bump('defences', n.risk?.level);
       else if (n.kind === 'external') { services++; bump('users', n.risk?.level || (n.ext?.blacklisted ? 'critical' : 'ok')); }
       else if (n.kind === 'host') bump('hosts', n.risk?.level);
       else {
@@ -584,6 +593,8 @@ export class GalaxyScene {
     }
     for (const p of this.pods) if (!p.data.pseudo) bump('pods', 'ok');
     out.users.text = [plural(services, 'service'), inbound ? 'inbound' : ''].filter(Boolean).join(' + ');
+    const stoppedLines = (this.graph?.edges || []).filter((e) => e.blocked).length;
+    out.defences.text = out.defences.shown ? [plural(out.defences.shown, 'defence'), stoppedLines ? `stopping ${plural(stoppedLines, 'thing')} now` : ''].filter(Boolean).join(' · ') : 'none reporting';
     const dev = out.services.shown - groups;
     out.services.text = [dev || !groups ? plural(dev, 'device') : '', groups ? plural(groups, 'group') + ' rolled up' : '', offline ? `${offline} offline` : ''].filter(Boolean).join(' · ');
     out.pods.text = plural(out.pods.shown, 'address', 'addresses');
@@ -888,7 +899,8 @@ export class GalaxyScene {
       o.disc.material.opacity = 0.13 * W.s;
       o.rim.material.opacity = 0.55 * W.s;
       o.label.element.style.opacity = W.s > 0.6 ? (W.s - 0.6) / 0.4 : 0;
-      o.grp.visible = W.s > 0.01;
+      o.grp.visible = W.s > 0.01 && this.layout.planes[L.key].r > 0;      // a plane with nothing on it is not drawn
+      if (!o.grp.visible) o.label.element.style.opacity = 0;
     }
     if (W.s > 0.01) this._anchorPlaneLabels();
 
@@ -947,6 +959,7 @@ export class GalaxyScene {
   }
 
   _edgeColor(e, t, out) {
+    if (e.stopped) return out.copy(C.stopped);
     // Traffic leaving the network fades from cyan into gold (the internet); warning and critical
     // still win, so a connection with a finding is never hidden by where it goes.
     if (e.extScope && e.lvl === 'ok') {
@@ -978,14 +991,14 @@ export class GalaxyScene {
       // Minor bundles (little traffic, on a very large network) only show for what is selected.
       const visible = !(e.data.minor && !(hi && hi.edges.has(e.data.id)));
       const inHi = !hi || hi.edges.has(e.data.id);
-      const base = e.inferredOnly ? 0.22 : e.idle ? 0.13 : 0.18 + 0.35 * e.level + (e.lvl !== 'ok' ? 0.25 : 0);
+      const base = e.stopped ? 0.5 + 0.4 * e.level : e.inferredOnly ? 0.22 : e.idle ? 0.13 : 0.18 + 0.35 * e.level + (e.lvl !== 'ok' ? 0.25 : 0);
       const alpha = visible ? base * (inHi ? (hi ? 1.6 : 1) : 0.05) : 0;
       for (let s = 0; s < SEG; s++) {
         for (const tt of [s / SEG, (s + 1) / SEG]) {
           bezier(e.p0, e.p1, e.p2, tt, v);
           this.edgePos[vi * 3] = v.x; this.edgePos[vi * 3 + 1] = v.y; this.edgePos[vi * 3 + 2] = v.z;
           this._edgeColor(e, tt, col);
-          const dash = e.inferredOnly && s % 2 === 1 ? 0 : 1;
+          const dash = (e.inferredOnly || e.stopped) && s % 2 === 1 ? 0 : 1;
           const fade = Math.min(1, tt * 6, (1 - tt) * 6) * 0.6 + 0.4;
           this.edgeCol[vi * 4] = col.r; this.edgeCol[vi * 4 + 1] = col.g; this.edgeCol[vi * 4 + 2] = col.b;
           this.edgeCol[vi * 4 + 3] = alpha * dash * fade;
@@ -1051,7 +1064,7 @@ export class GalaxyScene {
       const inHi = !hi || hi.edges.has(e.data.id);
       if (hi && !inHi) continue;
       if (e.data.minor && !hi) continue;
-      const quiet = e.inferredOnly || e.idle;
+      const quiet = e.inferredOnly || e.idle || e.stopped;
       const speed = (14 + 46 * e.level) * (quiet ? 0.35 : 1);
       const step = (speed * dt) / e.len;
       const size = quiet ? 2.4 : 3.2 + 3 * e.level;
@@ -1140,7 +1153,7 @@ export class GalaxyScene {
       if (n.kind === 'host') show = show && W.s > 0.5;
       else if (show && many && !hi) {
         const near = camPos.distanceTo(obj.pos) < 320;
-        show = near || n.kind === 'clients' || n.kind === 'entry' || (n.risk && n.risk.level !== 'ok');
+        show = near || n.kind === 'clients' || n.kind === 'entry' || isDefence(n) || (n.risk && n.risk.level !== 'ok');
       }
       const dim = hi && !hi.nodes.has(n.id);
       // Strata packs devices on one ring: keep only names unless the node is in focus.
@@ -1150,7 +1163,7 @@ export class GalaxyScene {
       // What must stay readable when labels collide: the selection, then trouble, then the landmarks.
       const lvl = n.risk?.level;
       const prio = (hi && hi.nodes.has(n.id) ? 100 : 0) + (lvl === 'critical' ? 60 : lvl === 'warning' ? 45 : 0)
-        + (n.kind === 'clients' ? (n.scope === 'lan' ? 40 : 58) : n.kind === 'entry' ? 30 : n.kind === 'workload' ? 20 + Math.min(10, Math.round(obj.size - 9))
+        + (isDefence(n) ? 50 : n.kind === 'clients' ? (n.scope === 'lan' ? 40 : 58) : n.kind === 'entry' ? 30 : n.kind === 'workload' ? 20 + Math.min(10, Math.round(obj.size - 9))
           : n.kind === 'host' ? 25 : n.kind === 'service' ? 20 : 12) - (n.ghost ? 15 : 0);
       items.push({ obj, el, prio, compact });
     }

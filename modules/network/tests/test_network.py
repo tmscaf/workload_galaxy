@@ -95,7 +95,8 @@ def test_internet_services_are_named_by_app_then_domain_then_address():
 def test_graph_has_devices_services_and_hosts(state):
     g = settle(state)
     kinds = {k: sum(1 for n in g["nodes"] if n["kind"] == k) for k in ("workload", "external", "host", "clients")}
-    assert kinds == {"workload": 17, "external": 13, "host": 2, "clients": 1}
+    assert kinds == {"workload": 17, "external": 15, "host": 2, "clients": 1}        # 13 internet services and 2 defences
+    assert g["network"]["services"] == 13                                             # a defence is not counted as a service
     tv = by_name(g, "living room tv")
     assert tv["namespace"] == "tv-media" and tv["device"]["downBps"] > tv["device"]["upBps"] > 0
     assert by_name(g, "web-vm")["pods"][0]["hostId"] == "host:hypervisor"            # a VM hangs off the hypervisor

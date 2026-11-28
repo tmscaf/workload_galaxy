@@ -168,6 +168,7 @@ button { cursor: pointer; }
 .sw { display: inline-block; width: 18px; height: 3px; border-radius: 2px; background: var(--c); margin-right: -6px;
   box-shadow: 0 0 8px var(--c); }
 .sw.dashed { background: repeating-linear-gradient(90deg, var(--muted) 0 4px, transparent 4px 7px); box-shadow: none; }
+.sw.dashed.stop { background: repeating-linear-gradient(90deg, #c07486 0 4px, transparent 4px 7px); }
 .lbl.layer .c { color: var(--crit); } .lbl.layer .w { color: var(--warn); }
 .list .tag { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; padding: 1px 6px;
   border-radius: 999px; border: 1px solid var(--line-strong); color: var(--muted); }
@@ -182,6 +183,7 @@ button { cursor: pointer; }
 .lbl.warning .n { color: #ffd08a; } .lbl.critical .n { color: #ff9aae; }
 .lbl.ghost .n { color: #8c99bb; font-weight: 500; }
 .lbl.ext-lan .n { color: #a8f5d2; } .lbl.ext-internet .n { color: #ffe9a3; } .lbl.ext-cluster .n { color: #cdeeff; }
+.lbl.ext-defence .n { color: #ffc4de; }
 .lbl .scope { font-size: 9.5px; font-weight: 700; letter-spacing: 0.1em; padding: 0 4px; border-radius: 3px; }
 .lbl.ext-lan .scope { color: #08251a; background: #5ee6a8; } .lbl.ext-internet .scope { color: #2a2100; background: #ffd75e; }
 .lbl.ext-cluster .scope { color: #0a2030; background: #9fdcff; }

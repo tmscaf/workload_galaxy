@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0
+
+- **Defences on the map.** DNS blocking, the firewall and your block list are drawn as points:
+  on a new *Defences* plane in Strata, between the internet and your devices, and around the
+  centre in Galaxy. Each appears only when there is data for it.
+- **What was stopped is a line.** A device connecting to the block page, an outgoing attempt the
+  firewall refused, the internet being turned away at the door, and a blocked service each get a
+  dashed, red-grey line to the defence that stopped them, stronger the more was stopped. These
+  carry a count, not a rate, and are kept out of the Connections table.
+- Clicking a defence shows what it stopped and for whom. DNS blocking links to the ad blocker's
+  page when that plugin is on.
+- "Internet services in use" no longer has anything but internet services in it.
+
 ## 0.4.0
 
 - **Plugins.** The module can carry optional add-ons, each with a switch and settings of its own

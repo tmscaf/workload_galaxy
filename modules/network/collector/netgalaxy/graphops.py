@@ -109,6 +109,13 @@ def filter_graph(graph: dict, namespaces: list[str] | None, include_platform: bo
         if e["target"] in ghosts and nodes[e["source"]]["kind"] == "clients" and e not in edges:
             keep.add(e["source"])
             edges.append(e)
+    # The defences (DNS blocking, the firewall, your block list) are landmarks: always on the map,
+    # with whatever was stopped there by something that is being shown.
+    defences = {nid for nid, n in nodes.items() if n.get("scope") == "defence"}
+    for e in graph["edges"]:
+        if e["target"] in defences and e["source"] in keep and e not in edges:
+            edges.append(e)
+    keep |= defences
     used_hosts = {p["hostId"] for nid in keep if nodes[nid]["kind"] == "workload" for p in nodes[nid]["pods"]}
     out_nodes = []
     for nid in keep:

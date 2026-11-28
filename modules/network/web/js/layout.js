@@ -6,13 +6,17 @@
 //
 // The planes of the strata view, top to bottom (the keys are the engine's, the meaning is the network's):
 //   users     the internet: the services devices talk to, and the internet reaching in
+//   defences  what stands in between: DNS blocking, the firewall, your block list (lines to these are things stopped)
 //   services  the devices on the network
 //   pods      the address each online device holds right now
 //   hosts     the router and anything else devices hang off (a hypervisor running VMs)
 import { hash01, visiblePods } from './format.js';
 
 export const GALAXY = { R1: 48, RS: 32, TWIST: 0.34, MIN_ARC: 15 };
-export const STRATA = { users: 100, services: 36, pods: -24, hosts: -80 };
+export const STRATA = { users: 104, defences: 70, services: 36, pods: -24, hosts: -80 };
+// Where each defence sits on its ring, so the three never swap places between refreshes.
+const DEFENCE_SLOT = { dns: 0, firewall: 1, blocks: 2 };
+export const isDefence = (n) => n.kind === 'external' && n.scope === 'defence';
 
 const TAU = Math.PI * 2;
 
@@ -130,7 +134,8 @@ export function computeLayouts(graph) {
   });
 
   // Internet services sit past the outermost orbit, near whoever talks to them.
-  const externals = nodes.filter((n) => n.kind === 'external');
+  const externals = nodes.filter((n) => n.kind === 'external' && !isDefence(n));
+  const defences = nodes.filter(isDefence);
   const extR = ringR(maxDepth + 1) + 8;
   const extAngles = externals.map((n) => {
     const ps = preds.get(n.id).filter((p) => angle.has(p));
@@ -144,6 +149,13 @@ export function computeLayouts(graph) {
     // Internet services orbit just beyond anything on your own network.
     const r = n.scope === 'internet' ? extR + G.RS * 0.8 : extR;
     galaxy.set(n.id, { x: Math.cos(ang) * r, y: (hash01(n.id) - 0.5) * 10, z: Math.sin(ang) * r });
+  }
+  // The defences ring the centre, just inside the first orbit: everything leaving passes them.
+  const defAngle = (n) => -Math.PI / 2 + ((DEFENCE_SLOT[n.defence?.type] ?? 3) / 3) * TAU + 0.5;
+  for (const n of defences) {
+    const ang = defAngle(n);
+    angle.set(n.id, ang);
+    galaxy.set(n.id, { x: Math.cos(ang) * 35, y: 16, z: Math.sin(ang) * 35 });
   }
   const lanUsers = nodes.some((n) => n.kind === 'clients' && n.scope === 'lan');
   for (const n of nodes) {
@@ -194,6 +206,13 @@ export function computeLayouts(graph) {
   const netR = Math.max(52, (netExt.length * 24) / TAU);
   placeNear(externals.filter((n) => !netExt.includes(n)), R * 1.22, (n) => preds.get(n.id) || []);
   placeNear(netExt, netR, (n) => preds.get(n.id) || [], STRATA.users);
+  // The defences have a plane of their own, between the internet and your devices.
+  const defR = defences.length > 1 ? 34 : 0;
+  for (const n of defences) {
+    const ang = defAngle(n);
+    ringAngle.set(n.id, ang);
+    strata.set(n.id, { x: Math.cos(ang) * defR, y: STRATA.defences, z: Math.sin(ang) * defR * 0.92 });
+  }
   for (const n of nodes) {
     if (n.kind === 'clients') strata.set(n.id, n.scope === 'lan' ? { x: -46, y: STRATA.users, z: 8 } : { x: 0, y: STRATA.users, z: 0 });
   }
@@ -230,6 +249,7 @@ export function computeLayouts(graph) {
 
   const planes = {
     users: { y: STRATA.users, r: netExt.length ? netR + 18 : lanUsers ? 64 : 26, internet: netExt.length },
+    defences: { y: STRATA.defences, r: defences.length ? defR + 22 : 0 },      // no radius: nothing to draw
     services: { y: STRATA.services, r: (externals.length > netExt.length ? R * 1.32 : R * 1.16) },
     pods: { y: STRATA.pods, r: R * 0.98 },
     hosts: { y: STRATA.hosts, r: hostsR },

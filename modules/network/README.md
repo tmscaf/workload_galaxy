@@ -74,6 +74,25 @@ URL in `/root/netgalaxy/url` and the token in `/root/netgalaxy/token` (mode 600)
 list above, and add a cron entry `* * * * * root /usr/local/bin/php -q /root/netgalaxy/netgalaxy-sync.php`.
 App setup: Secret `network-galaxy-actions` with `admin-password` and `blocklist-token`.
 
+## Defences on the map
+
+What stands between your devices and the internet is drawn too. In **Strata** it has a plane of
+its own, *Defences*, between the internet and your devices; in **Galaxy** the same points ring
+the centre. A dashed, red-grey line to one of them is something that was stopped there. It
+carries a count, never a rate, and is not listed among the connections.
+
+![The Defences plane in Strata, with DNS blocking selected](../../docs/screenshots/network-defences.png)
+
+| Point | Shown when | Lines to it | Its panel |
+|---|---|---|---|
+| **DNS blocking** | `NETGALAXY_SINKHOLE_IPS` is set | From each device connecting to the block page now | Blocked connections per device; with the [ad blocker](#ad-blocker) on, how many names it publishes and a link to its page |
+| **Firewall** | The router's firewall log is arriving | From *The internet (inbound)* when there are port forwards; from a device whose outgoing attempt was refused | Attempts turned away, how many sources, how many on a known-bad list, and who knocked most |
+| **Your block list** | You have blocked at least one address | From each blocked service still on the map | How many addresses, and whether the router has applied them |
+
+Two limits. Outside addresses the firewall turned away are not on the map, so they show as one
+count and one line, not a line each. And DNS blocking shows which devices are being blocked and
+how much, not which names they asked for.
+
 ## Plugins
 
 A plugin is an optional add-on inside the module. Each has a switch in the suite's Settings page,
