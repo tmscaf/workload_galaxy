@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from galaxy_core.settings import Field, schema
 
-PREFIX = "NETGALAXY"
+from .plugins import PLUGINS, PREFIX
+
 R, N, F, W, P, B, S, T = ("Router traffic (ntopng)", "Your network", "Firewall and DNS blocking", "Wi-Fi (UniFi controller)",
                           "Pings", "Blocking", "What cannot be observed", "Tuning")
 FIELDS = [
@@ -77,6 +78,9 @@ FIELDS = [
     Field("present_seconds", kind="int", default=900, minimum=60, label="A device is present if seen within (seconds)", group=T, advanced=True),
     Field("external_limit", kind="int", default=70, minimum=10, label="Internet services drawn individually", group=T, advanced=True),
 
+    # Each plugin's switch and settings, under a heading of its own.
+    *PLUGINS.fields(),
+
     Field("syslog_port", kind="int", default=5514, label="Syslog port", group="Serving", editable=False),
     Field("config_file", kind="path", label="Site file", group="Serving", editable=False),
     Field("data_dir", kind="path", label="Data folder", group="Serving", editable=False),
@@ -91,4 +95,5 @@ MANIFEST = {
     "needs": "A pfSense router running ntopng, reachable over HTTPS with a read-only login. Optional: remote syslog from the "
              "router, and a UniFi controller.",
     "envPrefix": PREFIX, "settings": schema(FIELDS, PREFIX),
+    "plugins": [{"id": c.id, "title": c.title, "summary": c.summary} for c in PLUGINS.classes],
 }

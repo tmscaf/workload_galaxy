@@ -39,6 +39,12 @@ one exception is the Network module's block list, which is off unless a password
 works by the router fetching and re-validating the list; the module has no way to change the
 router itself.
 
+**Plugins run inside their module.** A plugin is code in this repository, off until it is turned
+on in Settings; a module loads nothing from anywhere else. The Network module's ad blocker makes
+that module fetch the block lists you name from the internet, and serves the combined list only
+to a caller that has the router token and comes from an allowed address. It follows the same rule
+as the block list: the router fetches and decides, and the module cannot change the router.
+
 **The Kubernetes node agent is privileged.** It runs on every node with host process access to
 read connection tables. It is optional: without it the module shows the cluster's objects but
 not live connections.

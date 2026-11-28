@@ -26,8 +26,9 @@ DETAIL_TTL = 3600.0         # re-read a device's detail (MAC, type) this often
 
 
 class NetState:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, plugins=None):
         self.settings = settings
+        self.plugins = plugins                # galaxy_core.plugins.Plugins, already loaded; None runs without any
         self.started = time.time()
         self.graph: dict | None = None
         self.error: str | None = None
@@ -84,10 +85,14 @@ class NetState:
                 self.pinger.start()
             if self.unifi:
                 threading.Thread(target=self._wifi_loop, name="unifi", daemon=True).start()
+        if self.plugins:
+            self.plugins.start()
         threading.Thread(target=self._loop, name="refresh", daemon=True).start()
 
     def stop(self) -> None:
         self._stop.set()
+        if self.plugins:
+            self.plugins.stop()
         self.receiver.stop()
         self.inventory.save(force=True)
         self.pinger.stop()
@@ -221,10 +226,12 @@ class NetState:
             "agent": {"nodes": 0, "known": [], "stale": [], "agents": []},
             "prometheus": {"enabled": False, "error": None, "edges": 0}, "probes": {"enabled": False, "lastRun": None},
             "configInference": False,
+            "plugins": self.plugins.sources() if self.plugins else {},
         }
         builder = Builder(s, self.inventory, snap, events=events, leases=self.events.lease_map(), macs=self._macs,
                           details={ip: d for ip, (_t, d) in self._details.items()}, rates=self._rates if fresh else {},
-                          sources=sources, now=now, alive=self.reach.alive(), blocks=self.blocks.lookup(), vpn=vpn, wifi=wifi)
+                          sources=sources, now=now, alive=self.reach.alive(), blocks=self.blocks.lookup(), vpn=vpn, wifi=wifi,
+                          plugins=self.plugins)
         graph = builder.build()
         self.wifi.names = {mac: builder.nodes[nid]["name"] for mac, nid in builder.dev_by_mac.items() if nid in builder.nodes}
         self.build_seconds = round(time.monotonic() - started, 2)

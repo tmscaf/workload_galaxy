@@ -17,7 +17,7 @@ of them on a laptop with no cluster and no router ([Try it](#try-it)).
 | Module | Watches | Version | Docs |
 |---|---|---|---|
 | [Kubernetes](modules/kubernetes) | Kubernetes and OpenShift projects: workloads, pods, hosts, who calls whom, and where latency starts | 0.12.0 | [README](modules/kubernetes/README.md) · [changelog](modules/kubernetes/CHANGELOG.md) |
-| [Network](modules/network) | A home or small-office network behind a pfSense router: every device, what it talks to, what the firewall turns away, Wi-Fi and VPN | 0.3.0 | [README](modules/network/README.md) · [changelog](modules/network/CHANGELOG.md) |
+| [Network](modules/network) | A home or small-office network behind a pfSense router: every device, what it talks to, what the firewall turns away, Wi-Fi and VPN | 0.4.0 | [README](modules/network/README.md) · [changelog](modules/network/CHANGELOG.md) |
 | [ESXi](modules/esxi) | A VMware ESXi host: virtual machines, the networks and datastores they hang off, capacity and right-sizing | 0.2.0 | [README](modules/esxi/README.md) · [changelog](modules/esxi/CHANGELOG.md) |
 
 Each module is a separate service with its own image, version and deployment. They share
@@ -95,6 +95,11 @@ point's channel load, and every wireless device's signal and drops. A **VPN** ta
 who is connected and failed logins.
 
 ![Wi-Fi: the shared path, access points and per-device signal](docs/screenshots/network-wifi.png)
+
+An optional **Ad blocker** plugin publishes one list of ad and tracker names, built from the
+block lists you choose, for the router's DNS blocking to pull.
+
+![The ad blocker plugin's page](docs/screenshots/network-adblock.png)
 
 It reads ntopng and the firewall's syslog on a pfSense router, and optionally a UniFi
 controller. Addresses can be blocked from the page behind a separate action password;
@@ -195,6 +200,12 @@ nodes, edges and findings in the graph format, the refresh loop, and the API abo
 module is built on it. The Kubernetes and Network modules came first: they use the core for
 their settings, and still carry their own copies of the rest.
 
+A module can also carry **plugins**: optional add-ons inside it, each off until it is turned on
+in Settings. A plugin declares its settings and may add findings, a page of its own and API
+routes under `/api/v1/plugins/<id>`. Plugins ship in this repository with the module they
+belong to and are listed by name in its code; a module never loads code from anywhere else. The
+Network module's ad blocker is the first.
+
 Every module serves a manifest at `/api/v1/module` (what it is, what it
 needs, and the settings it takes) and a settings API the suite's Settings page reads and writes.
 A module accepts changes only from a caller that presents the settings token it shares with the
@@ -202,10 +213,10 @@ shell.
 
 ```
 core/
-  py/galaxy_core/   settings, graph builders, scoping, tables, refresh loop, shared API; tests
+  py/galaxy_core/   settings, plugins, graph builders, scoping, tables, refresh loop, shared API; tests
 modules/
   kubernetes/   collector, node agent, web UI, deploy (k8s base, openshift overlay), tests
-  network/      collector, web UI, deploy (k8s base, router sync script), tests
+  network/      collector (with its plugins), web UI, deploy (k8s base, router sync script), tests
   esxi/         collector, web UI, deploy (k8s base), tests
 shell/            the suite bar and module selector: app, web UI, deploy (k8s base), tests
 tools/            deploy-k3s.sh (build, ship and apply one part) and cluster-secrets.sh (one private

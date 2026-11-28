@@ -4,6 +4,7 @@
 """Workload Galaxy core: what every module shares.
 
     settings    declare a module's settings once; load them from the environment or a saved file
+    plugins     optional add-ons inside a module: their switches, settings and hooks
     nodes       build nodes, edges and findings in the graph format the front end draws
     graphops    scope a graph to some groups; summarise findings into totals and patterns
     scale       semantic zoom for large estates, and the server-side tables, detail and search
