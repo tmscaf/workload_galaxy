@@ -227,6 +227,7 @@ body.rail-hidden #rail { display: none; } body.rail-hidden #legend { left: 12px;
 body.view-triage #stage, body.view-triage #labels, body.view-triage #rail, body.view-triage #legend, body.view-triage #tooltip { display: none; }
 body.view-vpn #stage, body.view-vpn #labels, body.view-vpn #rail, body.view-vpn #legend, body.view-vpn #tooltip { display: none; }
 body.view-wifi #stage, body.view-wifi #labels, body.view-wifi #rail, body.view-wifi #legend, body.view-wifi #tooltip { display: none; }
+body.view-plugin #stage, body.view-plugin #labels, body.view-plugin #rail, body.view-plugin #legend, body.view-plugin #tooltip { display: none; }
 #triage { position: fixed; top: 76px; left: 12px; right: 12px; bottom: 12px; z-index: 9; overflow: auto; padding: 16px 18px 24px;
   background: rgba(7, 11, 23, 0.94); }
 body.embed #triage { top: 64px; left: 8px; right: 8px; bottom: 8px; }
@@ -611,6 +612,25 @@ body.view-triage #notices { bottom: 24px; }
 .si-chip .link { padding: 0; font-size: 11px; color: var(--muted); } .si-chip .link:hover { color: var(--text); }
 @media (max-width: 1700px) { #netName { display: none; } #topbar .search input { width: 240px; } }
 @media (max-width: 1450px) { #topbar .search input { width: 180px; } #topbar { gap: 10px; } }
+
+/* ---------- a plugin's page ---------- */
+.plugin-panel { position: fixed; top: 76px; left: 12px; right: 12px; bottom: 12px; z-index: 9; overflow: auto; padding: 16px 18px 24px;
+  background: rgba(7, 11, 23, 0.94); }
+body.embed .plugin-panel { top: 64px; left: 8px; right: 8px; bottom: 8px; }
+.plugin-panel .w { color: var(--warn); } .plugin-panel .c { color: var(--crit); } .plugin-panel .ok { color: var(--ok); }
+.plugin-panel .dim { color: var(--faint); } .plugin-panel .mono { font-family: var(--mono, ui-monospace, monospace); }
+.plugin-panel .vp-tile small { font-size: 12px; font-weight: 500; color: var(--muted); }
+.plugin-panel .btn.small { padding: 3px 9px; font-size: 11.5px; }
+.pl-box { max-width: 1000px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.025); }
+.pl-kv { margin: 10px 0 0; align-items: baseline; } .pl-kv dd { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.pl-table { width: 100%; max-width: 1000px; border-collapse: collapse; font-size: 12.5px; }
+.pl-table th { text-align: left; font-weight: 600; color: var(--muted); font-size: 11.5px; padding: 4px 10px 6px 0; border-bottom: 1px solid var(--line); }
+.pl-table td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--line); vertical-align: baseline; }
+.pl-table .n { text-align: right; font-variant-numeric: tabular-nums; padding-right: 22px; }
+.pl-own { display: grid; gap: 12px; max-width: 1000px; } .pl-k { font-size: 12.5px; font-weight: 600; margin-bottom: 2px; }
+.pl-k .dim { font-weight: 400; } .pl-own .vp-knocks li.ok { border-color: rgba(94, 230, 168, 0.35); }
+.pl-rej { list-style: none; margin: 4px 0 0; padding: 0; font-size: 12.5px; display: grid; gap: 3px; }
+.pl-limits { margin-top: 22px; }
 
 /* ---------- VPN panel ---------- */
 #vpn { position: fixed; top: 76px; left: 12px; right: 12px; bottom: 12px; z-index: 9; overflow: auto; padding: 16px 18px 24px;

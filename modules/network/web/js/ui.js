@@ -96,7 +96,7 @@ export class UI {
 
   setView(view) {
     // Three sections: Triage and VPN (dashboards) and the map. The view switcher belongs to the map only.
-    const section = view === 'triage' || view === 'vpn' || view === 'wifi' ? view : 'topology';
+    const section = view === 'triage' || view === 'vpn' || view === 'wifi' || view.startsWith('plugin:') ? view : 'topology';
     document.querySelectorAll('#topbar .sections button').forEach((b) => b.classList.toggle('on', b.dataset.section === section));
     $('#viewSeg').hidden = section !== 'topology';
     if (section === 'topology') document.querySelectorAll('#topbar .seg button').forEach((b) => b.classList.toggle('on', b.dataset.view === view));

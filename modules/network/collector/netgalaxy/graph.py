@@ -83,8 +83,9 @@ class Builder:
     def __init__(self, settings: Settings, inventory: Inventory, snap: dict, *, events: dict | None = None,
                  leases: dict | None = None, macs: dict | None = None, details: dict | None = None,
                  rates: dict | None = None, sources: dict | None = None, now: float = 0.0, alive: dict | None = None,
-                 blocks: dict | None = None, vpn: dict | None = None, wifi: dict | None = None):
+                 blocks: dict | None = None, vpn: dict | None = None, wifi: dict | None = None, plugins=None):
         self.s = settings
+        self.plugins = plugins                # the module's plugins that are on; they may add findings
         self.inv = inventory
         self.snap = snap
         self.events = events or {}

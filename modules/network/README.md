@@ -74,6 +74,72 @@ URL in `/root/netgalaxy/url` and the token in `/root/netgalaxy/token` (mode 600)
 list above, and add a cron entry `* * * * * root /usr/local/bin/php -q /root/netgalaxy/netgalaxy-sync.php`.
 App setup: Secret `network-galaxy-actions` with `admin-password` and `blocklist-token`.
 
+## Plugins
+
+A plugin is an optional add-on inside the module. Each has a switch in the suite's Settings page,
+under a heading of its own in the Network form, and is off until you turn it on. The plugins are
+the ones in [`collector/netgalaxy/plugins`](collector/netgalaxy/plugins); the module loads no
+others.
+
+### Ad blocker
+
+Publishes one list of ad and tracker names for the router's DNS blocking to pull, and shows which
+devices are running into it.
+
+![The ad blocker's page](../../docs/screenshots/network-adblock.png)
+
+```
+Settings names the block lists to use, plus names of your own to always block or never block
+  -> the plugin fetches each list from its publisher, keeps only what is a plain host name,
+     joins them, takes out what must never be blocked, and publishes the result at
+     /api/v1/plugins/adblock/feed (the router token and the router's own address are checked)
+  -> the router's DNS blocking fetches that address on its own schedule, like any other list
+```
+
+It keeps the rule the rest of the module follows: the app holds no router credentials and never
+connects to the router. It also bundles no block list. Each one is fetched while the plugin runs,
+from the address you give it, and stays under its publisher's licence.
+
+**Turn it on.** Settings > Network > *Plugin: Ad blocker*:
+
+| Setting | Variable | Meaning |
+|---|---|---|
+| Turn on the ad blocker | `NETGALAXY_ADBLOCK_ENABLED` | Off by default |
+| Block lists | `NETGALAXY_ADBLOCK_LISTS` | Web addresses of block lists, one per line. Hosts files, lists of one name per line, and plain ad-blocker rules are all read |
+| Always block | `NETGALAXY_ADBLOCK_BLOCK` | Names of your own to block |
+| Never block | `NETGALAXY_ADBLOCK_ALLOW` | Names that must keep working. Covers the name and everything under it, and wins over every list |
+| Fetch the lists every (hours) | `NETGALAXY_ADBLOCK_REFRESH_HOURS` | `24` |
+| Most names to publish | `NETGALAXY_ADBLOCK_MAX_NAMES` | `300000`. A small router has limited memory for DNS blocking |
+
+The list is served only when the router token (`NETGALAXY_BLOCKLIST_TOKEN`, Settings > Network >
+Blocking) is set, and only to the addresses allowed to fetch the block list.
+
+**Router setup (once).** In pfBlockerNG, add a DNSBL group with one source: the address the
+plugin's page shows under *The router*, with your router token on the end
+(`http://<this app>/api/v1/plugins/adblock/feed?token=<token>`). Set the group's action to Unbound
+and its update frequency to what suits you; once an hour is the most often pfBlockerNG fetches.
+Then run pfBlockerNG's update once. The plugin's page shows when the router last fetched the list
+and whether it has the current one.
+
+**What is kept from reaching the router:**
+
+- Names for your own network (`.lan`, `.local`, `.home.arpa`, `.internal` and the like), bare
+  words and addresses are never published, whatever a list says.
+- An ad-blocker rule about part of a page (`site##.banner`), a rule with options or a path, and an
+  exception rule are ignored; none of them puts the site itself on the list.
+- A list that cannot be fetched keeps its last good copy, in the data folder if there is one, so
+  a publisher's outage or a restart does not shrink what the router blocks.
+- While a list has no good copy yet, the feed answers 503 for the first 15 minutes of a run, so
+  the router keeps the list it has instead of loading a short one.
+
+Triage says when a list cannot be fetched, when a setting was left out and why, when the list is
+full, and when the router has stopped fetching it.
+
+**Limits.** Blocking by name cannot stop ads that come from the same name as the content, or
+reach a device that looks names up somewhere else over an encrypted connection. Changes reach the
+router when it next fetches, not at once. Which names each device asked for is not shown; the
+page counts connections to the block page, as the rest of the module does.
+
 ## VPN connections
 
 The **VPN** tab lists who is connected to the router's OpenVPN server right now (user, device, where
@@ -265,8 +331,9 @@ collector/netgalaxy/   ntopng.py (client), syslog.py (receiver + parsers), devic
                        probes.py (reachability), graph.py (builder), findings.py (checks),
                        pinger.py (latency and loss), unifi.py (controller client), wifi.py (where a connection breaks),
                        state.py (refresh loop), main.py (API), sample.py (sample network),
-                       scale.py + graphops.py (shared with the Kubernetes module)
-web/                   the front end (Three.js, no build step)
+                       scale.py + graphops.py (shared with the Kubernetes module),
+                       plugins/ (optional add-ons: adblock.py)
+web/                   the front end (Three.js, no build step); js/plugins/ holds each plugin's page
 deploy/k8s (the kustomize base), deploy/router (pfSense sync script)
 tests/
 ```

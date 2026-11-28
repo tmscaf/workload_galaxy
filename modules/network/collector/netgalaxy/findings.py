@@ -80,6 +80,8 @@ class Diagnoser:
             except Exception:  # noqa: BLE001 - one broken check must never take the map down
                 import logging
                 logging.getLogger(__name__).exception("check %s failed", step.__name__)
+        if self.b.plugins:
+            self.b.plugins.diagnose(self)
 
     def _devices_online(self) -> list[dict]:
         return [n for n in self.b.nodes.values() if n["kind"] == "workload" and n["device"]["present"] and not n.get("vpn")]

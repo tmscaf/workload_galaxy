@@ -29,6 +29,12 @@ every push and pull request.
   format, the tables and the settings API live there.
 - **Something about one kind of system** belongs in that module: where its data comes from
   (`collector/`), how it is drawn (`web/`), how it is deployed (`deploy/`).
+- **A plugin** is an optional add-on to one module: it lives in that module's `collector/<package>/plugins`
+  (and `web/js/plugins/<id>.js` if it has a page), is added by name to the module's plugin list, and is
+  off until someone turns it on. [`galaxy_core/plugins.py`](core/py/galaxy_core/plugins.py) says what one
+  provides. Plugins are part of this repository and reviewed with it; a module does not load code from
+  anywhere else. One that fetches data made by others (a block list, say) fetches it at run time and
+  never bundles it.
 - **A new module** starts as a copy of the shape of [`modules/esxi`](modules/esxi), the first one
   built on the core. Open a "new module" issue first so the map and the checks can be talked
   through before code is written.

@@ -23,6 +23,8 @@
     POST /api/v1/wifi/watch   ping a device every few seconds instead of every half minute   {mac, on}
     POST /api/v1/wifi/test    ping a device, its access point, the router and the internet side by side, now   {mac}
     POST /api/v1/vpn-status   the router's sync script reports the VPN server's client list (token + router only)
+    GET /api/v1/plugins       the module's plugins and which are on
+    GET /api/v1/plugins/<id>  what a plugin's page shows; a plugin may add routes of its own under it
     GET|PUT /api/v1/settings, POST /api/v1/settings/test   the suite's Settings page (settings token only)
     GET /healthz /readyz
     GET /                     the UI (works under any path prefix)
@@ -41,6 +43,7 @@ import mimetypes
 import os
 import time
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.gzip import GZipMiddleware
@@ -57,6 +60,7 @@ from .fields import FIELDS, MANIFEST, PREFIX
 from .devices import GROUPS
 from .findings import CATEGORIES
 from .graphops import filter_graph
+from .plugins import PLUGINS
 from .scale import collapse
 from .state import NetState
 
@@ -66,7 +70,12 @@ settings = load_settings()
 logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("netgalaxy")
-state = NetState(settings)
+# Plugins that are switched on. Each gets what the module knows, never the router's credentials.
+plugins = PLUGINS.load(SimpleNamespace(
+    mode=settings.mode, data_dir=settings.data_dir, router_configured=bool(settings.blocklist_token),
+    counts_blocked=bool(settings.sinkhole_ips), graph=lambda: state.current(),
+    router_only=lambda request, token: _router_only(request, token)))
+state = NetState(settings, plugins)
 auth = Auth(settings.admin_password)
 STARTED_AT = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -131,7 +140,8 @@ def meta():
             "refreshSeconds": settings.refresh_seconds, "error": state.error, "cluster": graph.get("cluster"),
             "sources": graph.get("sources"), "podLogs": False, "inCluster": False,
             "groups": [{"id": g, "title": t} for g, t in GROUPS], "categories": [{"id": c, "title": t} for c, t in CATEGORIES],
-            "ntopngUrl": settings.ntopng_url, "network": {"name": settings.network_name}}
+            "ntopngUrl": settings.ntopng_url, "network": {"name": settings.network_name},
+            "plugins": plugins.describe()}
 
 
 @app.get("/api/v1/version")
@@ -475,7 +485,10 @@ settingsapi.attach(app, api=settingsapi.RestartingSettings(STORE, BASE_ENV, test
 
 @app.get("/api/v1/module")
 def module_manifest():
-    return {**MANIFEST, "version": __version__, "build": __build__, "mode": settings.mode}
+    return {**MANIFEST, "version": __version__, "build": __build__, "mode": settings.mode, "plugins": plugins.describe()}
+
+
+plugins.mount(app)
 
 
 @app.get("/api/v1/demo/scenarios")

@@ -30,6 +30,11 @@ if (params.get('rail') === '0') document.body.classList.add('rail-hidden');
 const VIEW_NAMES = ['triage', 'vpn', 'wifi', 'galaxy', 'strata'];      // an old link to a view that no longer exists opens the galaxy
 const PANELS = ['triage', 'vpn', 'wifi'];                            // dashboards drawn over the paused map
 const isPanel = (v) => PANELS.includes(v);
+// The module's plugins that are on and have a page: id -> { view, el, badge, panel, Panel, data }. Their tabs are added
+// once the server has said which are on, so a link straight to a plugin's page waits for that.
+const plugins = new Map();
+const pluginFor = (v) => [...plugins.values()].find((p) => p && p.view === v);
+const firstView = params.get('view') || loadPref('view', '');
 const state = {
   namespaces: params.get('ns') ? params.get('ns').split(',').filter(Boolean) : loadPref('ns', null),
   // The view from the URL, else the one used last time (someone who lives in Triage lands in Triage).
@@ -44,6 +49,7 @@ const state = {
   meta: null,
   vpn: null,
   wifi: null,
+  pendingView: firstView.startsWith('plugin:') ? firstView : null,
   allNamespaces: [],
   lastOk: 0,
   refreshSeconds: 15,
@@ -189,6 +195,9 @@ window.addEventListener('resize', () => applyInsets(true));
 applyInsets(true);
 
 function applyView(v) {
+  const plug = pluginFor(v);
+  document.body.classList.toggle('view-plugin', !!plug);
+  for (const p of plugins.values()) if (p) p.el.hidden = p !== plug;
   document.body.classList.toggle('view-triage', v === 'triage');
   document.body.classList.toggle('view-vpn', v === 'vpn');
   document.body.classList.toggle('view-wifi', v === 'wifi');
@@ -200,6 +209,7 @@ function applyView(v) {
   if (v === 'triage') { ui.tooltip(null); triage.render(state.graph, state.meta); }
   else if (v === 'vpn') { ui.tooltip(null); vpnPanel.render(state.vpn, state.graph); }
   else if (v === 'wifi') { ui.tooltip(null); wifiPanel.render(state.wifi); }
+  else if (plug) { ui.tooltip(null); plug.panel.render(plug.data, state.graph); }
   else { state.mapView = v; scene.setView(v); }
 }
 
@@ -271,6 +281,35 @@ async function getJSON(path) {
   return res.json();
 }
 
+// Add a tab and a page for each plugin that is on. A plugin's page is the module web/js/plugins/<id>.js.
+async function syncPlugins(list) {
+  for (const p of list || []) {
+    if (!p.enabled || !p.tab || plugins.has(p.id) || !/^[a-z][a-z0-9_]*$/.test(p.id)) continue;
+    plugins.set(p.id, null);                 // tried: a page that fails to load is not fetched again on every refresh
+    let mod;
+    try { mod = await import(`./plugins/${p.id}.js`); } catch (err) { console.warn(`plugin ${p.id}: its page did not load`, err); continue; }
+    const view = `plugin:${p.id}`;
+    const el = document.createElement('main');
+    el.id = `plugin-${p.id}`; el.className = 'glass plugin-panel'; el.hidden = true; el.setAttribute('aria-label', p.tab.title);
+    document.getElementById('wifi').after(el);
+    const button = document.createElement('button');
+    button.dataset.section = view; button.title = p.tab.hint || ''; button.textContent = p.tab.title;
+    const badge = document.createElement('span');
+    badge.className = 'badge'; badge.hidden = true;
+    button.appendChild(badge);
+    button.addEventListener('click', () => setView(view));
+    document.querySelector('#topbar .sections').appendChild(button);
+    const panel = new mod.default(el, { base: API, copy: copyText, getJSON: (path) => getJSON(path),
+      onShowOnMap(id) { setView(state.mapView); reveal({ type: 'node', id }); } });
+    plugins.set(p.id, { id: p.id, view, el, badge, panel, Panel: mod.default, data: null });
+    VIEW_NAMES.push(view); PANELS.push(view);
+    if (state.pendingView === view) { state.pendingView = null; setView(view); }
+  }
+  await Promise.all([...plugins.values()].filter(Boolean).map(async (p) => {
+    p.data = await getJSON(`api/v1/plugins/${p.id}`).catch(() => p.data);
+  }));
+}
+
 async function load() {
   const q = scopeQuery();
   const token = Symbol('load');
@@ -285,6 +324,7 @@ async function load() {
     } else {
       graph = await getJSON('api/v1/topology?' + q.toString());
     }
+    await syncPlugins(meta.plugins);
     if (state.inflight !== token) return;
     setNtopngBase(meta.ntopngUrl);
     // The page keeps running across redeploys; notice when the server underneath changed,
@@ -341,6 +381,12 @@ async function load() {
       if (state.view === 'vpn') vpnPanel.render(vpn, graph);
       if (state.view === 'wifi') wifiPanel.render(wifi, true);
       else wifiPanel.data = wifi;
+      for (const p of plugins.values()) {
+        if (!p) continue;
+        const b = p.Panel.badge ? p.Panel.badge(p.data) : { count: 0 };
+        p.badge.hidden = !b.count; p.badge.textContent = b.count || ''; p.badge.className = `badge ${b.level || ''}`; p.badge.title = b.title || '';
+        if (state.view === p.view) p.panel.render(p.data, graph);
+      }
     });
     applyInsets();
     ui.toast(meta.error ? `Last refresh failed: ${meta.error}` : null);

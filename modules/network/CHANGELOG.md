@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.0
+
+- **Plugins.** The module can carry optional add-ons, each with a switch and settings of its own
+  under a heading in the suite's Settings page, off until turned on. A plugin can add findings, a
+  page with its own tab, and API routes under `/api/v1/plugins/<id>`. The plugins are the ones in
+  `collector/netgalaxy/plugins`; nothing else is loaded.
+- **Ad blocker**, the first plugin. It fetches the block lists you name, keeps only plain host
+  names, adds your own "always block" names, takes out your "never block" names and anything
+  that belongs to a local network, and publishes one list for the router's DNS blocking to pull.
+  Its page shows the lists and their state, when the router last fetched, your own names, and the
+  devices being blocked now. No list is bundled, and the app still never connects to the router.
+- A list that cannot be fetched keeps its last good copy across restarts, and the feed is held
+  back rather than published short.
+- New findings under Monitoring: a list that cannot be fetched, a setting that was left out, a
+  full list, and a router that is not fetching.
+
 ## 0.3.0
 
 - **Settings from the suite.** The router and ntopng login, your address ranges, the UniFi
